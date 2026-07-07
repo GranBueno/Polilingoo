@@ -8,16 +8,25 @@ import {
     Dimensions,
     ImageBackground,
 } from "react-native";
-
+import WorldTopNavbar from '../components/navbar/WorldTopNavbar';
+import WorldBottomNavbar from '../components/navbar/WorldBottomNavbar';
+import useAppFonts from '../hooks/useAppFonts';
+import { globalStyles } from '../styles/styles';
 const { width, height } = Dimensions.get("window");
 
 export default function RegistroScreen() {
+     const fontsLoaded = useAppFonts();
+
+    if (!fontsLoaded) {
+        return <View style={styles.loadingScreen} />;
+    }
     return (
         <ImageBackground
             source={require("../../assets/GL_GateOfAngels_DuckVsCrab.jpg")}
-            resizeMode="cover"
+            resizeMode="stretch"
             style={styles.background}
         >
+            
             <View style={styles.overlay}>
                 {/* Logo */}
                 <View style={styles.logoContainer}>
@@ -67,6 +76,20 @@ export default function RegistroScreen() {
                     </TouchableOpacity>
                 </View>
             </View>
+            
+            <WorldTopNavbar
+                worldName="MUNDO VERDE"
+                onPressLeft={() => {
+                    console.log('Ir al mundo anterior');
+                }}
+                onPressRight={() => {
+                    console.log('Ir al siguiente mundo');
+                }}
+            />
+            <WorldBottomNavbar
+                 racha={1}
+                 energia={4}
+            />
         </ImageBackground>
     );
 }
