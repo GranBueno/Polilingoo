@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
     View,
     Text,
@@ -7,33 +7,62 @@ import {
     TouchableOpacity,
     Dimensions,
     ImageBackground,
+    ActivityIndicator,
 } from "react-native";
-import WorldTopNavbar from '../components/navbar/WorldTopNavbar';
-import WorldBottomNavbar from '../components/navbar/WorldBottomNavbar';
-import useAppFonts from '../hooks/useAppFonts';
-import { globalStyles } from '../styles/styles';
+
+import Usuario from "../class/Usuarios";
+import Database from "../class/Database";
+
 const { width, height } = Dimensions.get("window");
 
-export default function RegistroScreen() {
-     const fontsLoaded = useAppFonts();
+export default function RegistroScreen({ navigation }) {
+    const [nombre, setNombre] = useState("");
+    const [correo, setCorreo] = useState("");
+    const [contrasena, setContrasena] = useState("");
+    const [error, setError] = useState("");
+    const [isRegistering, setIsRegistering] = useState(false);
 
-    if (!fontsLoaded) {
-        return <View style={styles.loadingScreen} />;
-    }
+    const registrarUsuario = async () => {
+        if (isRegistering) {
+            return;
+        }
+
+        const usuario = new Usuario(nombre, correo, contrasena);
+        const validacion = usuario.validarTodo();
+
+        if (!validacion.valido) {
+            setError(validacion.errores[0]);
+            return;
+        }
+
+        try {
+            setIsRegistering(true);
+            setError("");
+
+            const usuarioRegistrado = await Database.registrarUsuario(usuario);
+
+            navigation.replace("Mundo1Screen", {
+                usuarioId: usuarioRegistrado.id,
+            });
+        } catch (registroError) {
+            console.error("Error al registrar usuario:", registroError);
+            setError(registroError.message ?? "No se pudo registrar el usuario.");
+        } finally {
+            setIsRegistering(false);
+        }
+    };
+
     return (
         <ImageBackground
             source={require("../../assets/GL_GateOfAngels_DuckVsCrab.jpg")}
             resizeMode="stretch"
             style={styles.background}
         >
-            
             <View style={styles.overlay}>
-                {/* Logo */}
                 <View style={styles.logoContainer}>
                     <Text style={styles.logoTexto}>LOGO</Text>
                 </View>
 
-                {/* Formulario */}
                 <View style={styles.tarjeta}>
                     <View style={styles.contenidoTarjeta}>
                         <View style={styles.campoContainer}>
@@ -43,6 +72,9 @@ export default function RegistroScreen() {
                                 style={styles.input}
                                 placeholder="Ingrese usuario"
                                 placeholderTextColor="#444"
+                                value={nombre}
+                                onChangeText={setNombre}
+                                autoCapitalize="none"
                             />
                         </View>
 
@@ -54,6 +86,9 @@ export default function RegistroScreen() {
                                 placeholder="Ingrese correo electrónico"
                                 placeholderTextColor="#444"
                                 keyboardType="email-address"
+                                value={correo}
+                                onChangeText={setCorreo}
+                                autoCapitalize="none"
                             />
                         </View>
 
@@ -65,31 +100,47 @@ export default function RegistroScreen() {
                                 placeholder="Ingrese contraseña"
                                 placeholderTextColor="#444"
                                 secureTextEntry
+                                value={contrasena}
+                                onChangeText={setContrasena}
                             />
                         </View>
+
+                        {error ? (
+                            <Text style={styles.errorText}>{error}</Text>
+                        ) : null}
                     </View>
 
-                    <TouchableOpacity style={styles.boton}>
-                        <Text style={styles.botonTexto}>
-                            Registrarse
+                    <TouchableOpacity
+                        style={[
+                            styles.boton,
+                            isRegistering && styles.botonDeshabilitado,
+                        ]}
+                        onPress={registrarUsuario}
+                        disabled={isRegistering}
+                    >
+                        {isRegistering ? (
+                            <ActivityIndicator color="#FFF" />
+                        ) : (
+                            <Text style={styles.botonTexto}>
+                                Registrarse
+                            </Text>
+                        )}
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={styles.linkContainer}
+                        onPress={() => navigation.replace("LoginScreen")}
+                    >
+                        <Text style={styles.linkTexto}>
+                            ¿Ya tienes una cuenta?{" "}
+                            <Text style={styles.linkTextoDestacado}>
+                                Iniciar sesión
+                            </Text>
                         </Text>
                     </TouchableOpacity>
                 </View>
             </View>
-            
-            <WorldTopNavbar
-                worldName="MUNDO VERDE"
-                onPressLeft={() => {
-                    console.log('Ir al mundo anterior');
-                }}
-                onPressRight={() => {
-                    console.log('Ir al siguiente mundo');
-                }}
-            />
-            <WorldBottomNavbar
-                 racha={1}
-                 energia={4}
-            />
+
         </ImageBackground>
     );
 }
@@ -206,5 +257,34 @@ const styles = StyleSheet.create({
         color: "#FFF",
         fontWeight: "bold",
         fontSize: 17,
+    },
+
+    botonDeshabilitado: {
+        opacity: 0.65,
+    },
+
+    errorText: {
+        marginTop: -4,
+        color: "#7A1515",
+        fontWeight: "700",
+        fontSize: 13,
+        textAlign: "center",
+    },
+
+    linkContainer: {
+        paddingVertical: 14,
+        alignItems: "center",
+        backgroundColor: "rgba(255,255,255,0.35)",
+    },
+
+    linkTexto: {
+        color: "#000",
+        fontSize: 14,
+        fontWeight: "600",
+    },
+
+    linkTextoDestacado: {
+        color: "#3A1E78",
+        fontWeight: "900",
     },
 });

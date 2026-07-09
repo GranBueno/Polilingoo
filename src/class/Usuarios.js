@@ -1,34 +1,49 @@
-class Usuarios {
-    constructor(nombre, correo, contrasena, fechaReg, ultSesion, puntaje, mayorRacha, rachaActual) {
-        this.nombre = nombre;
-        this.correo = correo;
-        this.contrasena = contrasena;
-        this.fechareg = fechaReg;
-        this.ultsesio = ultSesion;
+export default class Usuario {
+    constructor(
+        nombre,
+        correo,
+        contrasena,
+        fechaRegistro = null,
+        ultimaSesion = null,
+        puntaje = 0,
+        mayorRacha = 0,
+        rachaActual = 0,
+        energia = 4
+    ) {
+        this.nombre = String(nombre ?? "").trim();
+        this.correo = String(correo ?? "").trim().toLowerCase();
+        this.contrasena = String(contrasena ?? "");
+        this.fechaRegistro = fechaRegistro;
+        this.ultimaSesion = ultimaSesion;
         this.puntaje = puntaje;
-        this.mayorracha = mayorRacha;
-        this.rachaactual = rachaActual;
+        this.mayorRacha = mayorRacha;
+        this.rachaActual = rachaActual;
+        this.energia = energia;
     }
 
-    // ---------------- MÉTODOS DE USUARIOS ----------------
-
-    // --------------- MÉTODOS DE RACHA ----------------
     aumentarRacha() {
-        if (this.rachaactual > this.mayorracha) {
-            this.mayorracha = this.rachaactual;
+        this.rachaActual += 1;
+
+        if (this.rachaActual > this.mayorRacha) {
+            this.mayorRacha = this.rachaActual;
         }
-        this.rachaactual += 1;
     }
+
     perderRacha() {
-        this.rachaactual = 0;
+        this.rachaActual = 0;
     }
 
-    // --------------- MÉTODOS DE PUNTAJE ----------------
     actualizarPuntaje(respuestasCorrectas, respuestasIncorrectas) {
-        this.puntaje += respuestasCorrectas * 10 - respuestasIncorrectas * 7;
+        const puntosGanados = respuestasCorrectas * 10;
+        const puntosPerdidos = respuestasIncorrectas * 7;
+
+        this.puntaje = Math.max(0, this.puntaje + puntosGanados - puntosPerdidos);
     }
 
-    // ---------------- VALIDACIONES ----------------
+    validarNombre() {
+        const regex = /^[a-zA-Z0-9\-_\/]{3,20}$/;
+        return regex.test(this.nombre);
+    }
 
     validarCorreo() {
         const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -40,17 +55,28 @@ class Usuarios {
         return regex.test(this.contrasena);
     }
 
-    validarNombre() {
-        // Solo letras, números, -, _, /
-        const regex = /^[a-zA-Z0-9\-_\/]+$/;
-        return regex.test(this.nombre);
-    }
-
     validarTodo() {
-        return (
-            this.validarCorreo() &&
-            this.validarContrasena() &&
-            this.validarNombre()
-        );
+        const errores = [];
+
+        if (!this.validarNombre()) {
+            errores.push(
+                "El usuario debe tener de 3 a 20 caracteres y solo puede usar letras, números, guion, guion bajo o /."
+            );
+        }
+
+        if (!this.validarCorreo()) {
+            errores.push("Ingresa un correo electrónico válido.");
+        }
+
+        if (!this.validarContrasena()) {
+            errores.push(
+                "La contraseña debe tener de 8 a 16 caracteres, una mayúscula y un carácter especial."
+            );
+        }
+
+        return {
+            valido: errores.length === 0,
+            errores,
+        };
     }
 }

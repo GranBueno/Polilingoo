@@ -3,12 +3,18 @@ export default class Leccion {
 
     constructor(
         id,
-        descripcion,
-        idDificultad
+        nombre,
+        descripcion = "",
+        idDificultad = 1,
+        mundoId = 1,
+        orden = 1
     ) {
         this.id = id;
+        this.nombre = nombre;
         this.descripcion = descripcion;
         this.idDificultad = idDificultad;
+        this.mundoId = mundoId;
+        this.orden = orden;
 
         // Map<idPregunta, Pregunta>
         this.preguntas = new Map();
@@ -20,23 +26,14 @@ export default class Leccion {
     }
 
     agregarPregunta(pregunta) {
-        if (
-            this.preguntas.size >=
-            Leccion.MAX_PREGUNTAS
-        ) {
+        if (this.preguntas.size >= Leccion.MAX_PREGUNTAS) {
             throw new Error(
                 `La lección solo puede contener ${Leccion.MAX_PREGUNTAS} preguntas`
             );
         }
 
-        this.preguntas.set(
-            pregunta.id,
-            pregunta
-        );
-
-        this.ordenPreguntas.push(
-            pregunta.id
-        );
+        this.preguntas.set(pregunta.id, pregunta);
+        this.ordenPreguntas.push(pregunta.id);
     }
 
     obtenerPregunta(idPregunta) {
@@ -48,21 +45,12 @@ export default class Leccion {
             return null;
         }
 
-        const idPregunta =
-            this.ordenPreguntas[
-                this.indiceActual
-            ];
-
-        return this.preguntas.get(
-            idPregunta
-        );
+        const idPregunta = this.ordenPreguntas[this.indiceActual];
+        return this.preguntas.get(idPregunta);
     }
 
     siguientePregunta() {
-        if (
-            this.indiceActual <
-            this.ordenPreguntas.length - 1
-        ) {
+        if (this.indiceActual < this.ordenPreguntas.length - 1) {
             this.indiceActual++;
         }
 
@@ -82,10 +70,7 @@ export default class Leccion {
     }
 
     finalizada() {
-        return (
-            this.indiceActual >=
-            this.ordenPreguntas.length - 1
-        );
+        return this.indiceActual >= this.ordenPreguntas.length - 1;
     }
 
     cantidadPreguntas() {
@@ -93,32 +78,32 @@ export default class Leccion {
     }
 
     obtenerTodasLasPreguntas() {
-        return Array.from(
-            this.preguntas.values()
-        );
+        return this.ordenPreguntas.map((idPregunta) => this.preguntas.get(idPregunta));
     }
 
     contienePregunta(idPregunta) {
-        return this.preguntas.has(
-            idPregunta
-        );
+        return this.preguntas.has(idPregunta);
     }
 
     eliminarPregunta(idPregunta) {
-        const indice =
-            this.ordenPreguntas.indexOf(
-                idPregunta
-            );
+        const indice = this.ordenPreguntas.indexOf(idPregunta);
 
         if (indice !== -1) {
-            this.ordenPreguntas.splice(
-                indice,
-                1
-            );
+            this.ordenPreguntas.splice(indice, 1);
         }
 
-        return this.preguntas.delete(
-            idPregunta
-        );
+        return this.preguntas.delete(idPregunta);
+    }
+
+    toPlainObject() {
+        return {
+            id: this.id,
+            nombre: this.nombre,
+            descripcion: this.descripcion,
+            idDificultad: this.idDificultad,
+            mundoId: this.mundoId,
+            orden: this.orden,
+            preguntas: this.obtenerTodasLasPreguntas().map((pregunta) => pregunta.toPlainObject()),
+        };
     }
 }
