@@ -5,6 +5,7 @@ import {
     ImageBackground,
     useWindowDimensions,
     Text,
+    AppState,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 
@@ -35,37 +36,56 @@ export default function Mundo1Screen({ route, navigation }) {
     const usuarioId = route?.params?.usuarioId ?? null;
 
     const [lecciones, setLecciones] = useState([]);
+    const [estadoJugador, setEstadoJugador] = useState({
+        energia: 4,
+        rachaActual: 0,
+        cristales: 0,
+        pergaminos: 0,
+    });
     const [error, setError] = useState("");
 
     useFocusEffect(
         useCallback(() => {
             let isActive = true;
 
-            const cargarLecciones = async () => {
+            const cargarDatos = async () => {
                 try {
                     setError("");
 
-                    const leccionesMundo = await Database.obtenerLeccionesPorMundo(
-                        usuarioId,
-                        1
-                    );
+                    const [leccionesMundo, datosJugador] = await Promise.all([
+                        Database.obtenerLeccionesPorMundo(usuarioId, 1),
+                        Database.obtenerEstadoJugador(usuarioId),
+                    ]);
 
                     if (isActive) {
                         setLecciones(leccionesMundo);
+                        setEstadoJugador(datosJugador);
                     }
                 } catch (loadError) {
-                    console.error("Error al cargar lecciones:", loadError);
+                    console.error("Error al cargar datos del mundo:", loadError);
 
                     if (isActive) {
-                        setError("No se pudieron cargar las lecciones.");
+                        setError("No se pudieron cargar los datos del jugador.");
                     }
                 }
             };
 
-            cargarLecciones();
+            cargarDatos();
+
+            const refreshInterval = setInterval(cargarDatos, 30000);
+            const appStateSubscription = AppState.addEventListener(
+                "change",
+                (nextState) => {
+                    if (nextState === "active") {
+                        cargarDatos();
+                    }
+                }
+            );
 
             return () => {
                 isActive = false;
+                clearInterval(refreshInterval);
+                appStateSubscription.remove();
             };
         }, [usuarioId])
     );
@@ -80,15 +100,35 @@ export default function Mundo1Screen({ route, navigation }) {
         left: cellWidth * (columna - 1),
     });
 
-    const irALeccion = (lessonData) => {
+    const irALeccion = async (lessonData) => {
         if (!lessonData || !lessonData.desbloqueada) {
             return;
         }
 
-        navigation.navigate("LeccionScreen", {
-            usuarioId,
-            lessonId: lessonData.id,
-        });
+        try {
+            const datosJugador = await Database.obtenerEstadoJugador(
+                usuarioId,
+                { registrarActividad: false }
+            );
+
+            setEstadoJugador(datosJugador);
+
+            if (datosJugador.energia <= 0) {
+                setError(
+                    "No tienes vidas disponibles. Recuperarás una vida cada 30 minutos."
+                );
+                return;
+            }
+
+            setError("");
+            navigation.navigate("LeccionScreen", {
+                usuarioId,
+                lessonId: lessonData.id,
+            });
+        } catch (loadError) {
+            console.error("Error al comprobar las vidas:", loadError);
+            setError("No se pudo comprobar el saldo de vidas.");
+        }
     };
 
     const renderDebugGrid = () => {
@@ -177,8 +217,8 @@ export default function Mundo1Screen({ route, navigation }) {
             />
 
             <WorldBottomNavbar
-                racha={1}
-                energia={4}
+                racha={estadoJugador.rachaActual}
+                energia={estadoJugador.energia}
             />
         </ImageBackground>
     );

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
     View,
     Text,
@@ -7,10 +7,12 @@ import {
     Pressable,
     Image,
     useWindowDimensions,
+    AppState,
 } from "react-native";
 
 import WorldBottomNavbar from "../components/navbar/WorldBottomNavbar";
 import { globalStyles } from "../styles/styles";
+import Database from "../class/Database";
 
 const COLUMNAS = 11;
 const FILAS = 15;
@@ -80,6 +82,13 @@ export default function ResultadoLeccionScreen({ route, navigation }) {
     const usuarioId = route?.params?.usuarioId ?? null;
     const lessonId = resumenLeccion.lessonId ?? route?.params?.lessonId ?? 1;
 
+    const [estadoJugador, setEstadoJugador] = useState({
+        energia: resumenLeccion.energia ?? 4,
+        rachaActual: resumenLeccion.rachaActual ?? 0,
+        cristales: resumenLeccion.recursos?.cristales ?? 0,
+        pergaminos: resumenLeccion.recursos?.pergaminos ?? 0,
+    });
+
     const totalPreguntas =
         resumenLeccion.totalPreguntas ?? TOTAL_PREGUNTAS_DEFAULT;
 
@@ -100,6 +109,46 @@ export default function ResultadoLeccionScreen({ route, navigation }) {
             ? Math.round((aciertos / totalPreguntas) * 100)
             : 0);
 
+    useEffect(() => {
+        let isMounted = true;
+
+        const cargarEstadoJugador = async () => {
+            try {
+                const datosJugador = await Database.obtenerEstadoJugador(
+                    usuarioId,
+                    { registrarActividad: false }
+                );
+
+                if (isMounted) {
+                    setEstadoJugador(datosJugador);
+                }
+            } catch (error) {
+                console.error(
+                    "Error al cargar el estado del jugador en resultados:",
+                    error
+                );
+            }
+        };
+
+        cargarEstadoJugador();
+
+        const refreshInterval = setInterval(cargarEstadoJugador, 30000);
+        const appStateSubscription = AppState.addEventListener(
+            "change",
+            (nextState) => {
+                if (nextState === "active") {
+                    cargarEstadoJugador();
+                }
+            }
+        );
+
+        return () => {
+            isMounted = false;
+            clearInterval(refreshInterval);
+            appStateSubscription.remove();
+        };
+    }, [usuarioId]);
+
     const terminarLeccion = () => {
         navigation.replace("Mundo1Screen", {
             usuarioId,
@@ -107,6 +156,10 @@ export default function ResultadoLeccionScreen({ route, navigation }) {
     };
 
     const repetirLeccion = () => {
+        if (estadoJugador.energia <= 0) {
+            return;
+        }
+
         navigation.replace("LeccionScreen", {
             usuarioId,
             lessonId,
@@ -305,8 +358,11 @@ export default function ResultadoLeccionScreen({ route, navigation }) {
                     </Pressable>
 
                     <Pressable
+                        disabled={estadoJugador.energia <= 0}
                         style={({ pressed }) => [
                             styles.resultButton,
+                            estadoJugador.energia <= 0 &&
+                                styles.resultButtonDisabled,
                             pressed && styles.resultButtonPressed,
                         ]}
                         onPress={repetirLeccion}
@@ -323,7 +379,9 @@ export default function ResultadoLeccionScreen({ route, navigation }) {
                             minimumFontScale={0.55}
                             includeFontPadding={false}
                         >
-                            Repetir
+                            {estadoJugador.energia <= 0
+                                ? "Sin vidas"
+                                : "Repetir"}
                         </Text>
                     </Pressable>
                 </View>
@@ -332,8 +390,8 @@ export default function ResultadoLeccionScreen({ route, navigation }) {
             {renderDebugGrid()}
 
             <WorldBottomNavbar
-                racha={1}
-                energia={4}
+                racha={estadoJugador.rachaActual}
+                energia={estadoJugador.energia}
             />
         </ImageBackground>
     );
@@ -510,6 +568,10 @@ const styles = StyleSheet.create({
     resultButtonPressed: {
         transform: [{ scale: 0.96 }],
         opacity: 0.88,
+    },
+
+    resultButtonDisabled: {
+        opacity: 0.5,
     },
 
     resultButtonText: {

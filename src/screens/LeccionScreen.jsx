@@ -115,6 +115,12 @@ export default function LeccionScreen({ route, navigation }) {
     const [lessonData, setLessonData] = useState(null);
     const [isLoadingLesson, setIsLoadingLesson] = useState(true);
     const [loadError, setLoadError] = useState("");
+    const [estadoJugador, setEstadoJugador] = useState({
+        energia: 4,
+        rachaActual: 0,
+        cristales: 0,
+        pergaminos: 0,
+    });
 
     const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
     const [errores, setErrores] = useState(0);
@@ -162,14 +168,24 @@ export default function LeccionScreen({ route, navigation }) {
                 isAnswerLockedRef.current = false;
                 startTimeRef.current = Date.now();
 
-                const leccionCargada = await Database.obtenerLeccionParaPantalla(lessonId);
+                const [leccionCargada, datosJugador] = await Promise.all([
+                    Database.obtenerLeccionParaPantalla(lessonId),
+                    Database.obtenerEstadoJugador(usuarioId),
+                ]);
 
                 if (!leccionCargada) {
                     throw new Error("La lección no existe en la base de datos.");
                 }
 
+                if (datosJugador.energia <= 0) {
+                    throw new Error(
+                        "No tienes vidas disponibles. Recuperarás una vida cada 30 minutos."
+                    );
+                }
+
                 if (isMounted) {
                     setLessonData(leccionCargada);
+                    setEstadoJugador(datosJugador);
                 }
             } catch (error) {
                 console.error("Error al cargar la lección:", error);
@@ -189,7 +205,7 @@ export default function LeccionScreen({ route, navigation }) {
         return () => {
             isMounted = false;
         };
-    }, [lessonId]);
+    }, [lessonId, usuarioId]);
 
     useEffect(() => {
         return () => {
@@ -205,7 +221,7 @@ export default function LeccionScreen({ route, navigation }) {
 
     const cellWidth = width / COLUMNAS;
     const cellHeight = height / FILAS;
-    const backButtonSize = Math.min(cellWidth, cellHeight) * 0.7;
+    const backButtonSize = 44;
 
     const getCellStyle = (
         fila,
@@ -257,7 +273,7 @@ export default function LeccionScreen({ route, navigation }) {
         return respuesta.validez === true || respuesta.id === preguntaActual.respuestaCorrectaId;
     };
 
-    const handleRespuesta = (respuesta, respuestaIndex) => {
+    const handleRespuesta = async (respuesta, respuestaIndex) => {
         if (isAnswerLockedRef.current || isLessonFinished || !preguntaActual) {
             return;
         }
@@ -266,6 +282,27 @@ export default function LeccionScreen({ route, navigation }) {
         setIsWaitingNextQuestion(true);
 
         const esCorrecta = respuestaEsCorrecta(respuesta);
+        let sinVidas = false;
+        let energiaDespuesRespuesta = estadoJugador.energia;
+
+        if (!esCorrecta && usuarioId) {
+            try {
+                const resultadoVida = await Database.descontarVida(usuarioId);
+                sinVidas = resultadoVida.sinVidas;
+                energiaDespuesRespuesta = resultadoVida.energia;
+
+                setEstadoJugador((estadoAnterior) => ({
+                    ...estadoAnterior,
+                    energia: resultadoVida.energia,
+                }));
+            } catch (lifeError) {
+                console.error("Error al descontar una vida:", lifeError);
+                setLoadError("No se pudo actualizar el sistema de vidas.");
+                setIsWaitingNextQuestion(false);
+                isAnswerLockedRef.current = false;
+                return;
+            }
+        }
 
         setSelectedAnswerIndex(respuestaIndex);
         setSelectedAnswerWasCorrect(esCorrecta);
@@ -288,8 +325,9 @@ export default function LeccionScreen({ route, navigation }) {
 
         nextQuestionTimerRef.current = setTimeout(async () => {
             const esUltimaPregunta = currentQuestionIndex >= preguntas.length - 1;
+            const debeFinalizar = esUltimaPregunta || sinVidas;
 
-            if (!esUltimaPregunta) {
+            if (!debeFinalizar) {
                 setCurrentQuestionIndex((prevIndex) => prevIndex + 1);
 
                 setIsWaitingNextQuestion(false);
@@ -304,11 +342,23 @@ export default function LeccionScreen({ route, navigation }) {
             const tiempoTotalSegundos = Math.round(
                 (Date.now() - startTimeRef.current) / 1000
             );
+            const leccionCompletada = !sinVidas;
+            const preguntasRespondidas = currentQuestionIndex + 1;
 
             let resultadoProgreso = {
                 precision: preguntas.length > 0
                     ? Math.round((correctasFinales / preguntas.length) * 100)
                     : 0,
+                completada: leccionCompletada,
+                motivoFinalizacion: leccionCompletada
+                    ? "completada"
+                    : "sin_vidas",
+                cristalesGanados: 0,
+                pergaminosGanados: 0,
+                recursos: {
+                    cristales: estadoJugador.cristales,
+                    pergaminos: estadoJugador.pergaminos,
+                },
                 siguienteLeccion: null,
                 siguienteLeccionDesbloqueada: false,
             };
@@ -321,7 +371,12 @@ export default function LeccionScreen({ route, navigation }) {
                         correctas: correctasFinales,
                         errores: erroresFinales,
                         totalPreguntas: preguntas.length,
+                        preguntasRespondidas,
                         tiempoTotalSegundos,
+                        completada: leccionCompletada,
+                        motivoFinalizacion: leccionCompletada
+                            ? "completada"
+                            : "sin_vidas",
                     });
                 }
             } catch (saveError) {
@@ -332,12 +387,21 @@ export default function LeccionScreen({ route, navigation }) {
                 lessonId: lessonData.id,
                 lessonName: lessonData.nombre,
                 totalPreguntas: preguntas.length,
+                preguntasRespondidas,
                 correctas: correctasFinales,
                 errores: erroresFinales,
                 tiempoTotalSegundos,
                 precision: resultadoProgreso.precision,
+                completada: resultadoProgreso.completada,
+                motivoFinalizacion: resultadoProgreso.motivoFinalizacion,
+                cristalesGanados: resultadoProgreso.cristalesGanados,
+                pergaminosGanados: resultadoProgreso.pergaminosGanados,
+                recursos: resultadoProgreso.recursos,
+                energia: energiaDespuesRespuesta,
+                rachaActual: estadoJugador.rachaActual,
                 siguienteLeccion: resultadoProgreso.siguienteLeccion,
-                siguienteLeccionDesbloqueada: resultadoProgreso.siguienteLeccionDesbloqueada,
+                siguienteLeccionDesbloqueada:
+                    resultadoProgreso.siguienteLeccionDesbloqueada,
             };
 
             console.log("Resumen de lección:", resumenLeccion);
@@ -600,8 +664,8 @@ export default function LeccionScreen({ route, navigation }) {
             {renderDebugGrid()}
 
             <WorldBottomNavbar
-                racha={1}
-                energia={4}
+                racha={estadoJugador.rachaActual}
+                energia={estadoJugador.energia}
             />
         </ImageBackground>
     );

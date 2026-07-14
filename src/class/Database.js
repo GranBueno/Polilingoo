@@ -11,6 +11,39 @@ let db = null;
 
 const nowISO = () => new Date().toISOString();
 
+const MAX_ENERGIA = 4;
+const INTERVALO_REGENERACION_ENERGIA_MS = 30 * 60 * 1000;
+const MILISEGUNDOS_POR_DIA = 24 * 60 * 60 * 1000;
+
+const pad2 = (value) => String(value).padStart(2, "0");
+
+const obtenerFechaLocal = (date = new Date()) => {
+    return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+};
+
+const fechaLocalAUTC = (fechaLocal) => {
+    const [year, month, day] = String(fechaLocal ?? "")
+        .split("-")
+        .map(Number);
+
+    if (!year || !month || !day) {
+        return null;
+    }
+
+    return Date.UTC(year, month - 1, day);
+};
+
+const calcularDiferenciaDias = (fechaAnterior, fechaActual) => {
+    const anteriorUTC = fechaLocalAUTC(fechaAnterior);
+    const actualUTC = fechaLocalAUTC(fechaActual);
+
+    if (anteriorUTC === null || actualUTC === null) {
+        return null;
+    }
+
+    return Math.round((actualUTC - anteriorUTC) / MILISEGUNDOS_POR_DIA);
+};
+
 const SEED_MUNDOS = [
     {
         id: 1,
@@ -368,7 +401,10 @@ class Database {
         `);
 
         await this.crearTablas();
+        await this.migrarEsquema();
         await this.sembrarDatosIniciales();
+        await this.sembrarCatalogoRecursos();
+        await this.inicializarRecursosUsuariosExistentes();
 
         console.log("Base de datos inicializada correctamente.");
 
@@ -398,7 +434,17 @@ class Database {
                 puntaje INTEGER NOT NULL DEFAULT 0,
                 mayor_racha INTEGER NOT NULL DEFAULT 0,
                 racha_actual INTEGER NOT NULL DEFAULT 0,
-                energia INTEGER NOT NULL DEFAULT 4
+                fecha_ultima_actividad TEXT,
+                energia INTEGER NOT NULL DEFAULT 4 CHECK (energia BETWEEN 0 AND 4),
+                energia_actualizada_en TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS actividad_diaria (
+                usuario_id INTEGER NOT NULL,
+                fecha_local TEXT NOT NULL,
+                fecha_registro TEXT NOT NULL,
+                PRIMARY KEY (usuario_id, fecha_local),
+                FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS mundos (
@@ -465,16 +511,178 @@ class Database {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 usuario_id INTEGER NOT NULL,
                 leccion_id INTEGER NOT NULL,
-                correctas INTEGER NOT NULL,
-                errores INTEGER NOT NULL,
-                total_preguntas INTEGER NOT NULL,
-                precision INTEGER NOT NULL,
-                tiempo_total_segundos INTEGER NOT NULL,
+                correctas INTEGER NOT NULL CHECK (correctas >= 0),
+                errores INTEGER NOT NULL CHECK (errores >= 0),
+                total_preguntas INTEGER NOT NULL CHECK (total_preguntas >= 0),
+                preguntas_respondidas INTEGER NOT NULL DEFAULT 0 CHECK (preguntas_respondidas >= 0),
+                precision INTEGER NOT NULL CHECK (precision BETWEEN 0 AND 100),
+                tiempo_total_segundos INTEGER NOT NULL CHECK (tiempo_total_segundos >= 0),
+                completada INTEGER NOT NULL DEFAULT 1 CHECK (completada IN (0, 1)),
+                motivo_finalizacion TEXT NOT NULL DEFAULT 'completada',
+                cristales_ganados INTEGER NOT NULL DEFAULT 0 CHECK (cristales_ganados >= 0),
+                pergaminos_ganados INTEGER NOT NULL DEFAULT 0 CHECK (pergaminos_ganados >= 0),
                 fecha_resultado TEXT NOT NULL,
                 FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
                 FOREIGN KEY (leccion_id) REFERENCES lecciones(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS tipos_recurso (
+                id TEXT PRIMARY KEY,
+                nombre TEXT NOT NULL UNIQUE
+            );
+
+            CREATE TABLE IF NOT EXISTS recursos_usuario (
+                usuario_id INTEGER NOT NULL,
+                recurso_id TEXT NOT NULL,
+                cantidad INTEGER NOT NULL DEFAULT 0 CHECK (cantidad >= 0),
+                PRIMARY KEY (usuario_id, recurso_id),
+                FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
+                FOREIGN KEY (recurso_id) REFERENCES tipos_recurso(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS movimientos_recurso (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                usuario_id INTEGER NOT NULL,
+                recurso_id TEXT NOT NULL,
+                cantidad INTEGER NOT NULL,
+                motivo TEXT NOT NULL,
+                leccion_id INTEGER,
+                clave_unica TEXT UNIQUE,
+                fecha_movimiento TEXT NOT NULL,
+                FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
+                FOREIGN KEY (recurso_id) REFERENCES tipos_recurso(id),
+                FOREIGN KEY (leccion_id) REFERENCES lecciones(id) ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_movimientos_recurso_usuario_fecha
+            ON movimientos_recurso (usuario_id, fecha_movimiento);
         `);
+    }
+
+    static async agregarColumnaSiFalta(tabla, columna, definicion) {
+        const conexion = this.obtenerConexion();
+        const columnas = await conexion.getAllAsync(`PRAGMA table_info(${tabla})`);
+        const existe = columnas.some((item) => item.name === columna);
+
+        if (!existe) {
+            await conexion.execAsync(
+                `ALTER TABLE ${tabla} ADD COLUMN ${columna} ${definicion}`
+            );
+        }
+    }
+
+    static async migrarEsquema() {
+        await this.agregarColumnaSiFalta(
+            "usuarios",
+            "fecha_ultima_actividad",
+            "TEXT"
+        );
+        await this.agregarColumnaSiFalta(
+            "usuarios",
+            "energia_actualizada_en",
+            "TEXT"
+        );
+        await this.agregarColumnaSiFalta(
+            "resultados_leccion",
+            "preguntas_respondidas",
+            "INTEGER NOT NULL DEFAULT 0"
+        );
+        await this.agregarColumnaSiFalta(
+            "resultados_leccion",
+            "completada",
+            "INTEGER NOT NULL DEFAULT 1 CHECK (completada IN (0, 1))"
+        );
+        await this.agregarColumnaSiFalta(
+            "resultados_leccion",
+            "motivo_finalizacion",
+            "TEXT NOT NULL DEFAULT 'completada'"
+        );
+        await this.agregarColumnaSiFalta(
+            "resultados_leccion",
+            "cristales_ganados",
+            "INTEGER NOT NULL DEFAULT 0"
+        );
+        await this.agregarColumnaSiFalta(
+            "resultados_leccion",
+            "pergaminos_ganados",
+            "INTEGER NOT NULL DEFAULT 0"
+        );
+
+        const conexion = this.obtenerConexion();
+
+        await conexion.runAsync(`
+            UPDATE resultados_leccion
+            SET preguntas_respondidas = correctas + errores
+            WHERE preguntas_respondidas = 0
+              AND correctas + errores > 0
+        `);
+
+        await conexion.execAsync(`
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_respuesta_correcta_unica
+            ON respuestas (pregunta_id)
+            WHERE es_correcta = 1;
+
+            CREATE TRIGGER IF NOT EXISTS trg_validar_resultado_leccion
+            BEFORE INSERT ON resultados_leccion
+            WHEN NEW.preguntas_respondidas <> NEW.correctas + NEW.errores
+              OR NEW.preguntas_respondidas > NEW.total_preguntas
+            BEGIN
+                SELECT RAISE(
+                    ABORT,
+                    'El resultado de la lección contiene cantidades inconsistentes.'
+                );
+            END;
+        `);
+    }
+
+    static async sembrarCatalogoRecursos() {
+        const conexion = this.obtenerConexion();
+
+        await conexion.runAsync(
+            "INSERT OR IGNORE INTO tipos_recurso (id, nombre) VALUES (?, ?)",
+            ["cristal", "Cristales"]
+        );
+        await conexion.runAsync(
+            "INSERT OR IGNORE INTO tipos_recurso (id, nombre) VALUES (?, ?)",
+            ["pergamino", "Pergaminos"]
+        );
+    }
+
+    static async inicializarRecursosUsuario(usuarioId) {
+        const conexion = this.obtenerConexion();
+
+        await conexion.runAsync(
+            `
+            INSERT OR IGNORE INTO recursos_usuario (
+                usuario_id,
+                recurso_id,
+                cantidad
+            )
+            VALUES (?, 'cristal', 0)
+            `,
+            [usuarioId]
+        );
+
+        await conexion.runAsync(
+            `
+            INSERT OR IGNORE INTO recursos_usuario (
+                usuario_id,
+                recurso_id,
+                cantidad
+            )
+            VALUES (?, 'pergamino', 0)
+            `,
+            [usuarioId]
+        );
+    }
+
+    static async inicializarRecursosUsuariosExistentes() {
+        const conexion = this.obtenerConexion();
+        const usuarios = await conexion.getAllAsync("SELECT id FROM usuarios");
+
+        for (const usuario of usuarios) {
+            await this.inicializarRecursosUsuario(usuario.id);
+        }
     }
 
     static async sembrarDatosIniciales() {
@@ -630,9 +838,11 @@ class Database {
                 puntaje,
                 mayor_racha,
                 racha_actual,
-                energia
+                fecha_ultima_actividad,
+                energia,
+                energia_actualizada_en
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
             [
                 usuario.nombre,
@@ -644,12 +854,16 @@ class Database {
                 usuario.puntaje ?? 0,
                 usuario.mayorRacha ?? 0,
                 usuario.rachaActual ?? 0,
-                usuario.energia ?? 4,
+                null,
+                usuario.energia ?? MAX_ENERGIA,
+                null,
             ]
         );
 
         const usuarioId = resultado.lastInsertRowId;
         await this.inicializarProgresoUsuario(usuarioId);
+        await this.inicializarRecursosUsuario(usuarioId);
+        await this.registrarActividadDiaria(usuarioId);
 
         return this.obtenerUsuarioPorId(usuarioId);
     }
@@ -665,6 +879,308 @@ class Database {
             `,
             [usuarioId]
         );
+    }
+
+    static async registrarActividadDiaria(usuarioId) {
+        const conexion = this.obtenerConexion();
+        const fechaHoy = obtenerFechaLocal();
+        const fechaActual = nowISO();
+        let resultadoRacha = null;
+
+        await conexion.withTransactionAsync(async () => {
+            const usuario = await conexion.getFirstAsync(
+                `
+                SELECT racha_actual, mayor_racha, fecha_ultima_actividad
+                FROM usuarios
+                WHERE id = ?
+                `,
+                [usuarioId]
+            );
+
+            if (!usuario) {
+                throw new Error("El usuario no existe.");
+            }
+
+            const actividadInsertada = await conexion.runAsync(
+                `
+                INSERT OR IGNORE INTO actividad_diaria (
+                    usuario_id,
+                    fecha_local,
+                    fecha_registro
+                )
+                VALUES (?, ?, ?)
+                `,
+                [usuarioId, fechaHoy, fechaActual]
+            );
+
+            if (actividadInsertada.changes === 0) {
+                await conexion.runAsync(
+                    "UPDATE usuarios SET ultima_sesion = ? WHERE id = ?",
+                    [fechaActual, usuarioId]
+                );
+
+                resultadoRacha = {
+                    rachaActual: usuario.racha_actual,
+                    mayorRacha: usuario.mayor_racha,
+                    fechaUltimaActividad: usuario.fecha_ultima_actividad,
+                };
+                return;
+            }
+
+            const diferenciaDias = calcularDiferenciaDias(
+                usuario.fecha_ultima_actividad,
+                fechaHoy
+            );
+            const rachaActual = diferenciaDias === 1
+                ? usuario.racha_actual + 1
+                : 1;
+            const mayorRacha = Math.max(usuario.mayor_racha, rachaActual);
+
+            await conexion.runAsync(
+                `
+                UPDATE usuarios
+                SET racha_actual = ?,
+                    mayor_racha = ?,
+                    fecha_ultima_actividad = ?,
+                    ultima_sesion = ?
+                WHERE id = ?
+                `,
+                [rachaActual, mayorRacha, fechaHoy, fechaActual, usuarioId]
+            );
+
+            resultadoRacha = {
+                rachaActual,
+                mayorRacha,
+                fechaUltimaActividad: fechaHoy,
+            };
+        });
+
+        return resultadoRacha;
+    }
+
+    static async regenerarEnergia(usuarioId) {
+        const conexion = this.obtenerConexion();
+        const usuario = await conexion.getFirstAsync(
+            `
+            SELECT energia, energia_actualizada_en
+            FROM usuarios
+            WHERE id = ?
+            `,
+            [usuarioId]
+        );
+
+        if (!usuario) {
+            throw new Error("El usuario no existe.");
+        }
+
+        const energiaActual = Math.max(
+            0,
+            Math.min(Number(usuario.energia) || 0, MAX_ENERGIA)
+        );
+
+        if (energiaActual >= MAX_ENERGIA) {
+            if (usuario.energia_actualizada_en) {
+                await conexion.runAsync(
+                    `
+                    UPDATE usuarios
+                    SET energia = ?, energia_actualizada_en = NULL
+                    WHERE id = ?
+                    `,
+                    [MAX_ENERGIA, usuarioId]
+                );
+            }
+
+            return {
+                energia: MAX_ENERGIA,
+                segundosParaSiguienteVida: 0,
+            };
+        }
+
+        const ahora = Date.now();
+        const marcaTiempo = Date.parse(usuario.energia_actualizada_en ?? "");
+
+        if (!Number.isFinite(marcaTiempo)) {
+            const fechaActual = nowISO();
+
+            await conexion.runAsync(
+                `
+                UPDATE usuarios
+                SET energia_actualizada_en = ?
+                WHERE id = ?
+                `,
+                [fechaActual, usuarioId]
+            );
+
+            return {
+                energia: energiaActual,
+                segundosParaSiguienteVida: Math.ceil(
+                    INTERVALO_REGENERACION_ENERGIA_MS / 1000
+                ),
+            };
+        }
+
+        const intervalosCompletos = Math.floor(
+            Math.max(0, ahora - marcaTiempo) /
+                INTERVALO_REGENERACION_ENERGIA_MS
+        );
+
+        let nuevaEnergia = energiaActual;
+        let nuevaMarcaTiempo = marcaTiempo;
+
+        if (intervalosCompletos > 0) {
+            nuevaEnergia = Math.min(
+                MAX_ENERGIA,
+                energiaActual + intervalosCompletos
+            );
+
+            nuevaMarcaTiempo =
+                marcaTiempo +
+                intervalosCompletos * INTERVALO_REGENERACION_ENERGIA_MS;
+
+            await conexion.runAsync(
+                `
+                UPDATE usuarios
+                SET energia = ?, energia_actualizada_en = ?
+                WHERE id = ?
+                `,
+                [
+                    nuevaEnergia,
+                    nuevaEnergia >= MAX_ENERGIA
+                        ? null
+                        : new Date(nuevaMarcaTiempo).toISOString(),
+                    usuarioId,
+                ]
+            );
+        }
+
+        if (nuevaEnergia >= MAX_ENERGIA) {
+            return {
+                energia: MAX_ENERGIA,
+                segundosParaSiguienteVida: 0,
+            };
+        }
+
+        const siguienteVidaEn =
+            nuevaMarcaTiempo + INTERVALO_REGENERACION_ENERGIA_MS;
+
+        return {
+            energia: nuevaEnergia,
+            segundosParaSiguienteVida: Math.max(
+                1,
+                Math.ceil((siguienteVidaEn - ahora) / 1000)
+            ),
+        };
+    }
+
+    static async descontarVida(usuarioId) {
+        await this.regenerarEnergia(usuarioId);
+
+        const conexion = this.obtenerConexion();
+        const usuario = await conexion.getFirstAsync(
+            `
+            SELECT energia, energia_actualizada_en
+            FROM usuarios
+            WHERE id = ?
+            `,
+            [usuarioId]
+        );
+
+        if (!usuario) {
+            throw new Error("El usuario no existe.");
+        }
+
+        const energiaActual = Math.max(
+            0,
+            Math.min(Number(usuario.energia) || 0, MAX_ENERGIA)
+        );
+
+        if (energiaActual <= 0) {
+            return {
+                energia: 0,
+                sinVidas: true,
+            };
+        }
+
+        const nuevaEnergia = energiaActual - 1;
+        const inicioRegeneracion = usuario.energia_actualizada_en ?? nowISO();
+
+        await conexion.runAsync(
+            `
+            UPDATE usuarios
+            SET energia = ?, energia_actualizada_en = ?
+            WHERE id = ?
+            `,
+            [nuevaEnergia, inicioRegeneracion, usuarioId]
+        );
+
+        return {
+            energia: nuevaEnergia,
+            sinVidas: nuevaEnergia === 0,
+        };
+    }
+
+    static async obtenerRecursosUsuario(usuarioId) {
+        await this.inicializarRecursosUsuario(usuarioId);
+
+        const conexion = this.obtenerConexion();
+        const recursos = await conexion.getAllAsync(
+            `
+            SELECT recurso_id AS recursoId, cantidad
+            FROM recursos_usuario
+            WHERE usuario_id = ?
+            `,
+            [usuarioId]
+        );
+
+        const resultado = {
+            cristales: 0,
+            pergaminos: 0,
+        };
+
+        for (const recurso of recursos) {
+            if (recurso.recursoId === "cristal") {
+                resultado.cristales = recurso.cantidad;
+            }
+
+            if (recurso.recursoId === "pergamino") {
+                resultado.pergaminos = recurso.cantidad;
+            }
+        }
+
+        return resultado;
+    }
+
+    static async obtenerEstadoJugador(
+        usuarioId,
+        { registrarActividad = true } = {}
+    ) {
+        if (!usuarioId) {
+            return {
+                energia: MAX_ENERGIA,
+                rachaActual: 0,
+                mayorRacha: 0,
+                cristales: 0,
+                pergaminos: 0,
+                segundosParaSiguienteVida: 0,
+            };
+        }
+
+        if (registrarActividad) {
+            await this.registrarActividadDiaria(usuarioId);
+        }
+
+        const energia = await this.regenerarEnergia(usuarioId);
+        const recursos = await this.obtenerRecursosUsuario(usuarioId);
+        const usuario = await this.obtenerUsuarioPorId(usuarioId);
+
+        return {
+            energia: energia.energia,
+            segundosParaSiguienteVida: energia.segundosParaSiguienteVida,
+            rachaActual: usuario?.racha_actual ?? 0,
+            mayorRacha: usuario?.mayor_racha ?? 0,
+            cristales: recursos.cristales,
+            pergaminos: recursos.pergaminos,
+        };
     }
 
     static async inicializarProgresoUsuario(usuarioId) {
@@ -851,20 +1367,94 @@ class Database {
         errores,
         totalPreguntas,
         tiempoTotalSegundos,
+        preguntasRespondidas = correctas + errores,
+        completada = true,
+        motivoFinalizacion = completada ? "completada" : "sin_vidas",
     }) {
         const conexion = this.obtenerConexion();
         const fechaActual = nowISO();
+
+        const cantidades = [
+            correctas,
+            errores,
+            totalPreguntas,
+            preguntasRespondidas,
+            tiempoTotalSegundos,
+        ];
+
+        if (cantidades.some((cantidad) => !Number.isInteger(cantidad) || cantidad < 0)) {
+            throw new Error("Las cantidades del resultado deben ser enteros positivos.");
+        }
+
+        if (
+            preguntasRespondidas !== correctas + errores ||
+            preguntasRespondidas > totalPreguntas
+        ) {
+            throw new Error("El resultado de la lección contiene datos inconsistentes.");
+        }
+
         const precision = totalPreguntas > 0
             ? Math.round((correctas / totalPreguntas) * 100)
             : 0;
 
         let resultadoFinal = {
             precision,
+            completada,
+            motivoFinalizacion,
+            cristalesGanados: 0,
+            pergaminosGanados: 0,
+            recursos: await this.obtenerRecursosUsuario(usuarioId),
             siguienteLeccion: null,
             siguienteLeccionDesbloqueada: false,
         };
 
         await conexion.withTransactionAsync(async () => {
+            const leccionActual = await conexion.getFirstAsync(
+                `
+                SELECT id, mundo_id, orden
+                FROM lecciones
+                WHERE id = ?
+                `,
+                [leccionId]
+            );
+
+            if (!leccionActual) {
+                throw new Error("La lección no existe.");
+            }
+
+            const progresoAnterior = await conexion.getFirstAsync(
+                `
+                SELECT completada
+                FROM progreso_leccion
+                WHERE usuario_id = ? AND leccion_id = ?
+                `,
+                [usuarioId, leccionId]
+            );
+
+            const primeraFinalizacion =
+                completada && progresoAnterior?.completada !== 1;
+            const cristalesGanados = completada
+                ? (leccionActual.orden + 10) * correctas
+                : 0;
+
+            let pergaminosGanados = 0;
+
+            if (primeraFinalizacion) {
+                const clavePergamino =
+                    `primera-finalizacion:${usuarioId}:${leccionId}`;
+                const recompensaExistente = await conexion.getFirstAsync(
+                    `
+                    SELECT id
+                    FROM movimientos_recurso
+                    WHERE clave_unica = ?
+                    LIMIT 1
+                    `,
+                    [clavePergamino]
+                );
+
+                pergaminosGanados = recompensaExistente ? 0 : 1;
+            }
+
             await conexion.runAsync(
                 `
                 INSERT INTO resultados_leccion (
@@ -873,11 +1463,16 @@ class Database {
                     correctas,
                     errores,
                     total_preguntas,
+                    preguntas_respondidas,
                     precision,
                     tiempo_total_segundos,
+                    completada,
+                    motivo_finalizacion,
+                    cristales_ganados,
+                    pergaminos_ganados,
                     fecha_resultado
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `,
                 [
                     usuarioId,
@@ -885,116 +1480,222 @@ class Database {
                     correctas,
                     errores,
                     totalPreguntas,
+                    preguntasRespondidas,
                     precision,
                     tiempoTotalSegundos,
+                    completada ? 1 : 0,
+                    motivoFinalizacion,
+                    cristalesGanados,
+                    pergaminosGanados,
                     fechaActual,
                 ]
             );
 
-            await conexion.runAsync(
-                `
-                INSERT INTO progreso_leccion (
-                    usuario_id,
-                    leccion_id,
-                    desbloqueada,
-                    completada,
-                    mejor_precision,
-                    mejor_tiempo_segundos,
-                    intentos,
-                    fecha_desbloqueo,
-                    fecha_completado
-                )
-                VALUES (?, ?, 1, 1, ?, ?, 1, ?, ?)
-                ON CONFLICT(usuario_id, leccion_id)
-                DO UPDATE SET
-                    desbloqueada = 1,
-                    completada = 1,
-                    mejor_precision = MAX(mejor_precision, excluded.mejor_precision),
-                    mejor_tiempo_segundos = CASE
-                        WHEN mejor_tiempo_segundos IS NULL THEN excluded.mejor_tiempo_segundos
-                        WHEN excluded.mejor_tiempo_segundos < mejor_tiempo_segundos THEN excluded.mejor_tiempo_segundos
-                        ELSE mejor_tiempo_segundos
-                    END,
-                    intentos = intentos + 1,
-                    fecha_desbloqueo = COALESCE(fecha_desbloqueo, excluded.fecha_desbloqueo),
-                    fecha_completado = excluded.fecha_completado
-                `,
-                [
-                    usuarioId,
-                    leccionId,
-                    precision,
-                    tiempoTotalSegundos,
-                    fechaActual,
-                    fechaActual,
-                ]
-            );
-
-            const leccionActual = await conexion.getFirstAsync(
-                `
-                SELECT mundo_id, orden
-                FROM lecciones
-                WHERE id = ?
-                `,
-                [leccionId]
-            );
-
-            if (!leccionActual) {
-                return;
+            if (completada) {
+                await conexion.runAsync(
+                    `
+                    INSERT INTO progreso_leccion (
+                        usuario_id,
+                        leccion_id,
+                        desbloqueada,
+                        completada,
+                        mejor_precision,
+                        mejor_tiempo_segundos,
+                        intentos,
+                        fecha_desbloqueo,
+                        fecha_completado
+                    )
+                    VALUES (?, ?, 1, 1, ?, ?, 1, ?, ?)
+                    ON CONFLICT(usuario_id, leccion_id)
+                    DO UPDATE SET
+                        desbloqueada = 1,
+                        completada = 1,
+                        mejor_precision = MAX(mejor_precision, excluded.mejor_precision),
+                        mejor_tiempo_segundos = CASE
+                            WHEN mejor_tiempo_segundos IS NULL THEN excluded.mejor_tiempo_segundos
+                            WHEN excluded.mejor_tiempo_segundos < mejor_tiempo_segundos THEN excluded.mejor_tiempo_segundos
+                            ELSE mejor_tiempo_segundos
+                        END,
+                        intentos = intentos + 1,
+                        fecha_desbloqueo = COALESCE(fecha_desbloqueo, excluded.fecha_desbloqueo),
+                        fecha_completado = COALESCE(fecha_completado, excluded.fecha_completado)
+                    `,
+                    [
+                        usuarioId,
+                        leccionId,
+                        precision,
+                        tiempoTotalSegundos,
+                        fechaActual,
+                        fechaActual,
+                    ]
+                );
+            } else {
+                await conexion.runAsync(
+                    `
+                    INSERT INTO progreso_leccion (
+                        usuario_id,
+                        leccion_id,
+                        desbloqueada,
+                        completada,
+                        mejor_precision,
+                        mejor_tiempo_segundos,
+                        intentos,
+                        fecha_desbloqueo,
+                        fecha_completado
+                    )
+                    VALUES (?, ?, 1, 0, 0, NULL, 1, ?, NULL)
+                    ON CONFLICT(usuario_id, leccion_id)
+                    DO UPDATE SET intentos = intentos + 1
+                    `,
+                    [usuarioId, leccionId, fechaActual]
+                );
             }
 
-            const siguienteLeccion = await conexion.getFirstAsync(
-                `
-                SELECT id, nombre, descripcion, orden, mundo_id AS mundoId
-                FROM lecciones
-                WHERE mundo_id = ?
-                  AND orden = ?
-                LIMIT 1
-                `,
-                [leccionActual.mundo_id, leccionActual.orden + 1]
-            );
+            if (cristalesGanados > 0) {
+                await conexion.runAsync(
+                    `
+                    UPDATE recursos_usuario
+                    SET cantidad = cantidad + ?
+                    WHERE usuario_id = ? AND recurso_id = 'cristal'
+                    `,
+                    [cristalesGanados, usuarioId]
+                );
 
-            if (!siguienteLeccion) {
-                return;
+                await conexion.runAsync(
+                    `
+                    INSERT INTO movimientos_recurso (
+                        usuario_id,
+                        recurso_id,
+                        cantidad,
+                        motivo,
+                        leccion_id,
+                        clave_unica,
+                        fecha_movimiento
+                    )
+                    VALUES (?, 'cristal', ?, 'leccion_completada', ?, NULL, ?)
+                    `,
+                    [usuarioId, cristalesGanados, leccionId, fechaActual]
+                );
             }
 
-            const progresoSiguiente = await conexion.getFirstAsync(
+            if (pergaminosGanados > 0) {
+                const clavePergamino =
+                    `primera-finalizacion:${usuarioId}:${leccionId}`;
+
+                const movimientoPergamino = await conexion.runAsync(
+                    `
+                    INSERT OR IGNORE INTO movimientos_recurso (
+                        usuario_id,
+                        recurso_id,
+                        cantidad,
+                        motivo,
+                        leccion_id,
+                        clave_unica,
+                        fecha_movimiento
+                    )
+                    VALUES (?, 'pergamino', 1, 'primera_finalizacion', ?, ?, ?)
+                    `,
+                    [usuarioId, leccionId, clavePergamino, fechaActual]
+                );
+
+                if (movimientoPergamino.changes > 0) {
+                    await conexion.runAsync(
+                        `
+                        UPDATE recursos_usuario
+                        SET cantidad = cantidad + 1
+                        WHERE usuario_id = ? AND recurso_id = 'pergamino'
+                        `,
+                        [usuarioId]
+                    );
+                }
+            }
+
+            let siguienteLeccion = null;
+            let siguienteLeccionDesbloqueada = false;
+
+            if (completada) {
+                siguienteLeccion = await conexion.getFirstAsync(
+                    `
+                    SELECT id, nombre, descripcion, orden, mundo_id AS mundoId
+                    FROM lecciones
+                    WHERE mundo_id = ? AND orden = ?
+                    LIMIT 1
+                    `,
+                    [leccionActual.mundo_id, leccionActual.orden + 1]
+                );
+
+                if (siguienteLeccion) {
+                    const progresoSiguiente = await conexion.getFirstAsync(
+                        `
+                        SELECT desbloqueada
+                        FROM progreso_leccion
+                        WHERE usuario_id = ? AND leccion_id = ?
+                        `,
+                        [usuarioId, siguienteLeccion.id]
+                    );
+
+                    const yaEstabaDesbloqueada =
+                        progresoSiguiente?.desbloqueada === 1;
+
+                    await conexion.runAsync(
+                        `
+                        INSERT INTO progreso_leccion (
+                            usuario_id,
+                            leccion_id,
+                            desbloqueada,
+                            completada,
+                            mejor_precision,
+                            mejor_tiempo_segundos,
+                            intentos,
+                            fecha_desbloqueo,
+                            fecha_completado
+                        )
+                        VALUES (?, ?, 1, 0, 0, NULL, 0, ?, NULL)
+                        ON CONFLICT(usuario_id, leccion_id)
+                        DO UPDATE SET
+                            desbloqueada = 1,
+                            fecha_desbloqueo = COALESCE(fecha_desbloqueo, excluded.fecha_desbloqueo)
+                        `,
+                        [usuarioId, siguienteLeccion.id, fechaActual]
+                    );
+
+                    siguienteLeccionDesbloqueada = !yaEstabaDesbloqueada;
+                }
+            }
+
+            const recursos = await conexion.getAllAsync(
                 `
-                SELECT desbloqueada
-                FROM progreso_leccion
+                SELECT recurso_id AS recursoId, cantidad
+                FROM recursos_usuario
                 WHERE usuario_id = ?
-                  AND leccion_id = ?
                 `,
-                [usuarioId, siguienteLeccion.id]
+                [usuarioId]
             );
 
-            const yaEstabaDesbloqueada = progresoSiguiente?.desbloqueada === 1;
+            const recursosActuales = {
+                cristales: 0,
+                pergaminos: 0,
+            };
 
-            await conexion.runAsync(
-                `
-                INSERT INTO progreso_leccion (
-                    usuario_id,
-                    leccion_id,
-                    desbloqueada,
-                    completada,
-                    mejor_precision,
-                    mejor_tiempo_segundos,
-                    intentos,
-                    fecha_desbloqueo,
-                    fecha_completado
-                )
-                VALUES (?, ?, 1, 0, 0, NULL, 0, ?, NULL)
-                ON CONFLICT(usuario_id, leccion_id)
-                DO UPDATE SET
-                    desbloqueada = 1,
-                    fecha_desbloqueo = COALESCE(fecha_desbloqueo, excluded.fecha_desbloqueo)
-                `,
-                [usuarioId, siguienteLeccion.id, fechaActual]
-            );
+            for (const recurso of recursos) {
+                if (recurso.recursoId === "cristal") {
+                    recursosActuales.cristales = recurso.cantidad;
+                }
+
+                if (recurso.recursoId === "pergamino") {
+                    recursosActuales.pergaminos = recurso.cantidad;
+                }
+            }
 
             resultadoFinal = {
                 precision,
+                completada,
+                motivoFinalizacion,
+                cristalesGanados,
+                pergaminosGanados,
+                recursos: recursosActuales,
                 siguienteLeccion,
-                siguienteLeccionDesbloqueada: !yaEstabaDesbloqueada,
+                siguienteLeccionDesbloqueada,
             };
         });
 

@@ -64,14 +64,7 @@ export default function LoginScreen({ navigation }) {
                 return;
             }
 
-            await conexion.runAsync(
-                `
-                UPDATE usuarios
-                SET ultima_sesion = ?
-                WHERE id = ?
-                `,
-                [new Date().toISOString(), usuarioEncontrado.id]
-            );
+            await Database.registrarActividadDiaria(usuarioEncontrado.id);
 
             navigation.replace("Mundo1Screen", {
                 usuarioId: usuarioEncontrado.id,

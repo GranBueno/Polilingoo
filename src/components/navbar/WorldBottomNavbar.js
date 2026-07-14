@@ -125,26 +125,26 @@ export default function WorldBottomNavbar({
 
 const styles = StyleSheet.create({
     container: {
-    position: 'absolute',
-    left: 12,
-    right: 12,
-    bottom: 18,
+        position: 'absolute',
+        left: 12,
+        right: 12,
+        bottom: 18,
 
-    height: 120,
+        height: 120,
 
-    zIndex: 100,
-    elevation: 100,
-},
+        zIndex: 100,
+        elevation: 100,
+    },
 
     contentRow: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'center',
+        justifyContent: 'space-around',
     },
 
     navItem: {
-        flex: 1,
+        width: '30%',
         height: '100%',
 
         alignItems: 'center',
@@ -159,29 +159,32 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
 
-        iconImage: {
-        width: 105,
+    iconImage: {
+        width: '100%',
+        maxWidth: 105,
         height: 105,
     },
 
     profileImage: {
-        width: 110,
+        width: '100%',
+        maxWidth: 110,
         height: 110,
     },
+
     valueTextContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
 
-    alignItems: 'center',
-    justifyContent: 'center',
-},
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
 
-valueText: {
-    fontSize: 18,
-    lineHeight: 22,
-    textAlign: 'center',
-},
+    valueText: {
+        fontSize: 18,
+        lineHeight: 22,
+        textAlign: 'center',
+    },
 });
