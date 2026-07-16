@@ -1,18 +1,22 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
     View,
     StyleSheet,
     ImageBackground,
     useWindowDimensions,
     Text,
-    AppState,
+    Pressable,
+    Modal,
 } from "react-native";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 
 import WorldTopNavbar from "../components/navbar/WorldTopNavbar";
 import WorldBottomNavbar from "../components/navbar/WorldBottomNavbar";
 import LessonButton from "../components/LessonButton";
+import DebugGrid from "../components/layout/DebugGrid";
 import Database from "../class/Database";
+import usePlayerState from "../hooks/usePlayerState";
+import { DURACION_MENSAJE_MS } from "../config/gameRules";
 import { globalStyles } from "../styles/styles";
 
 const COLUMNAS = 8;
@@ -34,15 +38,38 @@ const LESSON_POSITIONS = [
 export default function Mundo1Screen({ route, navigation }) {
     const { width, height } = useWindowDimensions();
     const usuarioId = route?.params?.usuarioId ?? null;
+    const isFocused = useIsFocused();
 
     const [lecciones, setLecciones] = useState([]);
-    const [estadoJugador, setEstadoJugador] = useState({
-        energia: 4,
-        rachaActual: 0,
-        cristales: 0,
-        pergaminos: 0,
+    const isOpeningLessonRef = useRef(false);
+    const {
+        estadoJugador,
+        setEstadoJugador,
+        refreshEstadoJugador,
+        playerError,
+    } = usePlayerState(usuarioId, {
+        enabled: isFocused,
+        registerActivityOnEnable: true,
     });
     const [error, setError] = useState("");
+
+    useEffect(() => {
+        if (!error) {
+            return undefined;
+        }
+
+        const timeout = setTimeout(
+            () => setError(""),
+            DURACION_MENSAJE_MS
+        );
+        return () => clearTimeout(timeout);
+    }, [error]);
+
+    useEffect(() => {
+        if (playerError) {
+            setError("No se pudieron cargar los datos del jugador.");
+        }
+    }, [playerError]);
 
     useFocusEffect(
         useCallback(() => {
@@ -51,15 +78,11 @@ export default function Mundo1Screen({ route, navigation }) {
             const cargarDatos = async () => {
                 try {
                     setError("");
-
-                    const [leccionesMundo, datosJugador] = await Promise.all([
-                        Database.obtenerLeccionesPorMundo(usuarioId, 1),
-                        Database.obtenerEstadoJugador(usuarioId),
-                    ]);
+                    const leccionesMundo =
+                        await Database.obtenerLeccionesPorMundo(usuarioId, 1);
 
                     if (isActive) {
                         setLecciones(leccionesMundo);
-                        setEstadoJugador(datosJugador);
                     }
                 } catch (loadError) {
                     console.error("Error al cargar datos del mundo:", loadError);
@@ -72,20 +95,8 @@ export default function Mundo1Screen({ route, navigation }) {
 
             cargarDatos();
 
-            const refreshInterval = setInterval(cargarDatos, 30000);
-            const appStateSubscription = AppState.addEventListener(
-                "change",
-                (nextState) => {
-                    if (nextState === "active") {
-                        cargarDatos();
-                    }
-                }
-            );
-
             return () => {
                 isActive = false;
-                clearInterval(refreshInterval);
-                appStateSubscription.remove();
             };
         }, [usuarioId])
     );
@@ -101,15 +112,20 @@ export default function Mundo1Screen({ route, navigation }) {
     });
 
     const irALeccion = async (lessonData) => {
-        if (!lessonData || !lessonData.desbloqueada) {
+        if (
+            isOpeningLessonRef.current ||
+            !lessonData ||
+            !lessonData.desbloqueada
+        ) {
             return;
         }
 
+        isOpeningLessonRef.current = true;
+
         try {
-            const datosJugador = await Database.obtenerEstadoJugador(
-                usuarioId,
-                { registrarActividad: false }
-            );
+            const datosJugador = await refreshEstadoJugador({
+                registrarActividad: false,
+            });
 
             setEstadoJugador(datosJugador);
 
@@ -128,40 +144,15 @@ export default function Mundo1Screen({ route, navigation }) {
         } catch (loadError) {
             console.error("Error al comprobar las vidas:", loadError);
             setError("No se pudo comprobar el saldo de vidas.");
+        } finally {
+            isOpeningLessonRef.current = false;
         }
-    };
-
-    const renderDebugGrid = () => {
-        if (!SHOW_GRID) {
-            return null;
-        }
-
-        const cells = [];
-
-        for (let fila = 1; fila <= FILAS; fila++) {
-            for (let columna = 1; columna <= COLUMNAS; columna++) {
-                cells.push(
-                    <View
-                        key={`fila-${fila}-columna-${columna}`}
-                        style={[
-                            styles.debugCell,
-                            getCellStyle(fila, columna),
-                        ]}
-                    />
-                );
-            }
-        }
-
-        return (
-            <View pointerEvents="none" style={styles.debugGrid}>
-                {cells}
-            </View>
-        );
     };
 
     const renderLessonButtons = () => {
         return LESSON_POSITIONS.map((position, index) => {
-            const leccion = lecciones[index] ?? null;
+            const leccion =
+                lecciones.find((item) => item.orden === index + 1) ?? null;
             const lessonNumber = leccion?.orden ?? index + 1;
             const isLocked = !leccion || leccion.desbloqueada !== 1;
 
@@ -187,23 +178,19 @@ export default function Mundo1Screen({ route, navigation }) {
             resizeMode="stretch"
             style={styles.background}
         >
-            {renderDebugGrid()}
+            <DebugGrid
+                visible={SHOW_GRID}
+                rows={FILAS}
+                columns={COLUMNAS}
+                cellWidth={cellWidth}
+                cellHeight={cellHeight}
+                zIndex={1}
+            />
 
             <View style={styles.lessonLayer}>
                 {renderLessonButtons()}
 
-                {error ? (
-                    <View style={styles.errorContainer}>
-                        <Text
-                            style={[
-                                globalStyles.navbarWorldText,
-                                styles.errorText,
-                            ]}
-                        >
-                            {error}
-                        </Text>
-                    </View>
-                ) : null}
+
             </View>
 
             <WorldTopNavbar
@@ -216,9 +203,37 @@ export default function Mundo1Screen({ route, navigation }) {
                 }}
             />
 
+            <Modal
+                visible={Boolean(error)}
+                transparent
+                animationType="fade"
+                statusBarTranslucent
+                onRequestClose={() => setError("")}
+            >
+                <Pressable
+                    style={styles.noticeOverlay}
+                    onPress={() => setError("")}
+                >
+                    <View style={styles.errorContainer}>
+                        <Text
+                            style={[
+                                globalStyles.navbarWorldText,
+                                styles.errorText,
+                            ]}
+                        >
+                            {error}
+                        </Text>
+                    </View>
+                </Pressable>
+            </Modal>
+
             <WorldBottomNavbar
                 racha={estadoJugador.rachaActual}
+                usuarioId={usuarioId}
                 energia={estadoJugador.energia}
+                cristales={estadoJugador.cristales}
+                segundosParaSiguienteVida={estadoJugador.segundosParaSiguienteVida}
+                onEstadoJugadorChange={setEstadoJugador}
             />
         </ImageBackground>
     );
@@ -229,18 +244,6 @@ const styles = StyleSheet.create({
         flex: 1,
         width: "100%",
         height: "100%",
-    },
-
-    debugGrid: {
-        ...StyleSheet.absoluteFillObject,
-        position: "absolute",
-        zIndex: 1,
-    },
-
-    debugCell: {
-        position: "absolute",
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: "rgba(255,255,255,0.75)",
     },
 
     lessonLayer: {
@@ -256,11 +259,18 @@ const styles = StyleSheet.create({
         overflow: "visible",
     },
 
-    errorContainer: {
+    noticeOverlay: {
+        ...StyleSheet.absoluteFillObject,
         position: "absolute",
-        top: "46%",
-        left: "8%",
-        right: "8%",
+        zIndex: 300,
+        elevation: 300,
+        backgroundColor: "rgba(20, 13, 8, 0.30)",
+        justifyContent: "center",
+        alignItems: "center",
+    },
+
+    errorContainer: {
+        width: "84%",
         padding: 12,
         borderRadius: 14,
         backgroundColor: "rgba(244, 224, 180, 0.82)",

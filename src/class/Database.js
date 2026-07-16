@@ -4,16 +4,35 @@ import * as Crypto from "expo-crypto";
 import Leccion from "./Leccion";
 import Pregunta from "./Pregunta";
 import Respuesta from "./Respuesta";
+import {
+    SEED_DIFICULTADES,
+    SEED_LECCIONES,
+    SEED_MUNDOS,
+} from "../data/worldsdata";
+import {
+    COSTO_VIDA_CRISTALES,
+    MAX_VIDAS,
+    calcularCristalesGanados,
+    calcularPrecision,
+    calcularRegeneracionEnergia,
+} from "../config/gameRules";
 
 const DB_NAME = "Polilingo.db";
+const DB_SCHEMA_VERSION = 3;
 
 let db = null;
+let initializationPromise = null;
+let writeQueue = Promise.resolve();
 
 const nowISO = () => new Date().toISOString();
 
-const MAX_ENERGIA = 4;
-const INTERVALO_REGENERACION_ENERGIA_MS = 30 * 60 * 1000;
 const MILISEGUNDOS_POR_DIA = 24 * 60 * 60 * 1000;
+
+const ejecutarEscrituraSerializada = (task) => {
+    const nextTask = writeQueue.then(task, task);
+    writeQueue = nextTask.catch(() => undefined);
+    return nextTask;
+};
 
 const pad2 = (value) => String(value).padStart(2, "0");
 
@@ -44,355 +63,39 @@ const calcularDiferenciaDias = (fechaAnterior, fechaActual) => {
     return Math.round((actualUTC - anteriorUTC) / MILISEGUNDOS_POR_DIA);
 };
 
-const SEED_MUNDOS = [
-    {
-        id: 1,
-        nombre: "MUNDO VERDE",
-        orden: 1,
-    },
-];
+const mapearRecursos = (recursos = []) => {
+    const resultado = {
+        cristales: 0,
+        pergaminos: 0,
+    };
 
-const SEED_DIFICULTADES = [
-    {
-        id: 1,
-        nombre: "Inicial",
-    },
-];
-
-const SEED_LECCIONES = [
-    {
-        id: 1,
-        mundoId: 1,
-        dificultadId: 1,
-        nombre: "Lección 1",
-        descripcion: "Naturaleza básica",
-        orden: 1,
-        preguntas: [
-            {
-                texto: "Forest",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Un lugar con muchos árboles.",
-                respuestas: [
-                    { texto: "Bosque", correcta: true },
-                    { texto: "Río", correcta: false },
-                    { texto: "Montaña", correcta: false },
-                    { texto: "Fuego", correcta: false },
-                ],
-            },
-            {
-                texto: "River",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Agua que fluye por la tierra.",
-                respuestas: [
-                    { texto: "Piedra", correcta: false },
-                    { texto: "Río", correcta: true },
-                    { texto: "Árbol", correcta: false },
-                    { texto: "Casa", correcta: false },
-                ],
-            },
-            {
-                texto: "Fire",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Da calor y luz.",
-                respuestas: [
-                    { texto: "Agua", correcta: false },
-                    { texto: "Fuego", correcta: true },
-                    { texto: "Montaña", correcta: false },
-                    { texto: "Viento", correcta: false },
-                ],
-            },
-            {
-                texto: "Mountain",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Elevación grande de tierra.",
-                respuestas: [
-                    { texto: "Bosque", correcta: false },
-                    { texto: "Cielo", correcta: false },
-                    { texto: "Montaña", correcta: true },
-                    { texto: "Luna", correcta: false },
-                ],
-            },
-            {
-                texto: "Water",
-                instruccion: "Elige la traducción correcta.",
-                pista: "La bebemos para vivir.",
-                respuestas: [
-                    { texto: "Agua", correcta: true },
-                    { texto: "Fuego", correcta: false },
-                    { texto: "Tierra", correcta: false },
-                    { texto: "Sol", correcta: false },
-                ],
-            },
-        ],
-    },
-    {
-        id: 2,
-        mundoId: 1,
-        dificultadId: 1,
-        nombre: "Lección 2",
-        descripcion: "Cielo y tiempo",
-        orden: 2,
-        preguntas: [
-            {
-                texto: "Sun",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Aparece durante el día.",
-                respuestas: [
-                    { texto: "Sol", correcta: true },
-                    { texto: "Luna", correcta: false },
-                    { texto: "Noche", correcta: false },
-                    { texto: "Estrella", correcta: false },
-                ],
-            },
-            {
-                texto: "Moon",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Se ve mucho durante la noche.",
-                respuestas: [
-                    { texto: "Día", correcta: false },
-                    { texto: "Luna", correcta: true },
-                    { texto: "Luz", correcta: false },
-                    { texto: "Cielo", correcta: false },
-                ],
-            },
-            {
-                texto: "Star",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Punto brillante en el cielo nocturno.",
-                respuestas: [
-                    { texto: "Roca", correcta: false },
-                    { texto: "Estrella", correcta: true },
-                    { texto: "Árbol", correcta: false },
-                    { texto: "Agua", correcta: false },
-                ],
-            },
-            {
-                texto: "Day",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Cuando hay luz del sol.",
-                respuestas: [
-                    { texto: "Día", correcta: true },
-                    { texto: "Noche", correcta: false },
-                    { texto: "Fuego", correcta: false },
-                    { texto: "Río", correcta: false },
-                ],
-            },
-            {
-                texto: "Night",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Cuando el cielo está oscuro.",
-                respuestas: [
-                    { texto: "Camino", correcta: false },
-                    { texto: "Sol", correcta: false },
-                    { texto: "Noche", correcta: true },
-                    { texto: "Casa", correcta: false },
-                ],
-            },
-        ],
-    },
-    {
-        id: 3,
-        mundoId: 1,
-        dificultadId: 1,
-        nombre: "Lección 3",
-        descripcion: "Personas y criaturas",
-        orden: 3,
-        preguntas: [
-            {
-                texto: "Wolf",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Animal parecido a un perro salvaje.",
-                respuestas: [
-                    { texto: "Lobo", correcta: true },
-                    { texto: "Ave", correcta: false },
-                    { texto: "Niño", correcta: false },
-                    { texto: "Maestro", correcta: false },
-                ],
-            },
-            {
-                texto: "Bird",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Animal con alas.",
-                respuestas: [
-                    { texto: "Luna", correcta: false },
-                    { texto: "Ave", correcta: true },
-                    { texto: "Fuego", correcta: false },
-                    { texto: "Río", correcta: false },
-                ],
-            },
-            {
-                texto: "Friend",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Persona cercana y de confianza.",
-                respuestas: [
-                    { texto: "Enemigo", correcta: false },
-                    { texto: "Amigo", correcta: true },
-                    { texto: "Bosque", correcta: false },
-                    { texto: "Puerta", correcta: false },
-                ],
-            },
-            {
-                texto: "Teacher",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Persona que enseña.",
-                respuestas: [
-                    { texto: "Maestro", correcta: true },
-                    { texto: "Estrella", correcta: false },
-                    { texto: "Camino", correcta: false },
-                    { texto: "Viento", correcta: false },
-                ],
-            },
-            {
-                texto: "Child",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Persona de poca edad.",
-                respuestas: [
-                    { texto: "Niño", correcta: true },
-                    { texto: "Montaña", correcta: false },
-                    { texto: "Agua", correcta: false },
-                    { texto: "Libro", correcta: false },
-                ],
-            },
-        ],
-    },
-    {
-        id: 4,
-        mundoId: 1,
-        dificultadId: 1,
-        nombre: "Lección 4",
-        descripcion: "Acciones básicas",
-        orden: 4,
-        preguntas: [
-            {
-                texto: "Run",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Moverse rápido con las piernas.",
-                respuestas: [
-                    { texto: "Correr", correcta: true },
-                    { texto: "Dormir", correcta: false },
-                    { texto: "Leer", correcta: false },
-                    { texto: "Beber", correcta: false },
-                ],
-            },
-            {
-                texto: "Eat",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Consumir comida.",
-                respuestas: [
-                    { texto: "Escribir", correcta: false },
-                    { texto: "Comer", correcta: true },
-                    { texto: "Correr", correcta: false },
-                    { texto: "Mirar", correcta: false },
-                ],
-            },
-            {
-                texto: "Drink",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Consumir líquido.",
-                respuestas: [
-                    { texto: "Beber", correcta: true },
-                    { texto: "Leer", correcta: false },
-                    { texto: "Saltar", correcta: false },
-                    { texto: "Caminar", correcta: false },
-                ],
-            },
-            {
-                texto: "Read",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Interpretar texto escrito.",
-                respuestas: [
-                    { texto: "Cantar", correcta: false },
-                    { texto: "Leer", correcta: true },
-                    { texto: "Beber", correcta: false },
-                    { texto: "Abrir", correcta: false },
-                ],
-            },
-            {
-                texto: "Write",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Crear palabras con letras.",
-                respuestas: [
-                    { texto: "Escribir", correcta: true },
-                    { texto: "Correr", correcta: false },
-                    { texto: "Comer", correcta: false },
-                    { texto: "Dormir", correcta: false },
-                ],
-            },
-        ],
-    },
-    {
-        id: 5,
-        mundoId: 1,
-        dificultadId: 1,
-        nombre: "Lección 5",
-        descripcion: "Frases sencillas",
-        orden: 5,
-        preguntas: [
-            {
-                texto: "Good morning",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Saludo usado al empezar el día.",
-                respuestas: [
-                    { texto: "Buenos días", correcta: true },
-                    { texto: "Buenas noches", correcta: false },
-                    { texto: "Gracias", correcta: false },
-                    { texto: "Adiós", correcta: false },
-                ],
-            },
-            {
-                texto: "Thank you",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Se usa para agradecer.",
-                respuestas: [
-                    { texto: "Hola", correcta: false },
-                    { texto: "Gracias", correcta: true },
-                    { texto: "Perdón", correcta: false },
-                    { texto: "Hasta luego", correcta: false },
-                ],
-            },
-            {
-                texto: "See you later",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Despedida temporal.",
-                respuestas: [
-                    { texto: "Hasta luego", correcta: true },
-                    { texto: "Buenos días", correcta: false },
-                    { texto: "Por favor", correcta: false },
-                    { texto: "Bienvenido", correcta: false },
-                ],
-            },
-            {
-                texto: "Please",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Hace una petición más amable.",
-                respuestas: [
-                    { texto: "Gracias", correcta: false },
-                    { texto: "Por favor", correcta: true },
-                    { texto: "Agua", correcta: false },
-                    { texto: "Perdón", correcta: false },
-                ],
-            },
-            {
-                texto: "Welcome",
-                instruccion: "Elige la traducción correcta.",
-                pista: "Se dice al recibir a alguien.",
-                respuestas: [
-                    { texto: "Bienvenido", correcta: true },
-                    { texto: "Adiós", correcta: false },
-                    { texto: "Maestro", correcta: false },
-                    { texto: "Noche", correcta: false },
-                ],
-            },
-        ],
-    },
-];
-
-class Database {
-    static async inicializar() {
-        if (db) {
-            return db;
+    for (const recurso of recursos) {
+        if (recurso.recursoId === "cristal") {
+            resultado.cristales = recurso.cantidad;
         }
 
+        if (recurso.recursoId === "pergamino") {
+            resultado.pergaminos = recurso.cantidad;
+        }
+    }
+
+    return resultado;
+};
+
+class Database {
+    static inicializar() {
+        if (!initializationPromise) {
+            initializationPromise = this.inicializarInterno().catch((error) => {
+                db = null;
+                initializationPromise = null;
+                throw error;
+            });
+        }
+
+        return initializationPromise;
+    }
+
+    static async inicializarInterno() {
         db = await SQLite.openDatabaseAsync(DB_NAME);
 
         await db.execAsync(`
@@ -405,6 +108,7 @@ class Database {
         await this.sembrarDatosIniciales();
         await this.sembrarCatalogoRecursos();
         await this.inicializarRecursosUsuariosExistentes();
+        await this.inicializarProgresoUsuariosExistentes();
 
         console.log("Base de datos inicializada correctamente.");
 
@@ -435,7 +139,8 @@ class Database {
                 mayor_racha INTEGER NOT NULL DEFAULT 0,
                 racha_actual INTEGER NOT NULL DEFAULT 0,
                 fecha_ultima_actividad TEXT,
-                energia INTEGER NOT NULL DEFAULT 4 CHECK (energia BETWEEN 0 AND 4),
+                energia INTEGER NOT NULL DEFAULT ${MAX_VIDAS}
+                    CHECK (energia BETWEEN 0 AND ${MAX_VIDAS}),
                 energia_actualizada_en TEXT
             );
 
@@ -521,6 +226,7 @@ class Database {
                 motivo_finalizacion TEXT NOT NULL DEFAULT 'completada',
                 cristales_ganados INTEGER NOT NULL DEFAULT 0 CHECK (cristales_ganados >= 0),
                 pergaminos_ganados INTEGER NOT NULL DEFAULT 0 CHECK (pergaminos_ganados >= 0),
+                clave_intento TEXT,
                 fecha_resultado TEXT NOT NULL,
                 FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
                 FOREIGN KEY (leccion_id) REFERENCES lecciones(id) ON DELETE CASCADE
@@ -554,6 +260,11 @@ class Database {
                 FOREIGN KEY (leccion_id) REFERENCES lecciones(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS metadatos_app (
+                clave TEXT PRIMARY KEY,
+                valor TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_movimientos_recurso_usuario_fecha
             ON movimientos_recurso (usuario_id, fecha_movimiento);
         `);
@@ -572,6 +283,16 @@ class Database {
     }
 
     static async migrarEsquema() {
+        const conexion = this.obtenerConexion();
+        const versionResult = await conexion.getFirstAsync(
+            "PRAGMA user_version"
+        );
+        const currentVersion = Number(versionResult?.user_version) || 0;
+
+        if (currentVersion >= DB_SCHEMA_VERSION) {
+            return;
+        }
+
         await this.agregarColumnaSiFalta(
             "usuarios",
             "fecha_ultima_actividad",
@@ -607,8 +328,11 @@ class Database {
             "pergaminos_ganados",
             "INTEGER NOT NULL DEFAULT 0"
         );
-
-        const conexion = this.obtenerConexion();
+        await this.agregarColumnaSiFalta(
+            "resultados_leccion",
+            "clave_intento",
+            "TEXT"
+        );
 
         await conexion.runAsync(`
             UPDATE resultados_leccion
@@ -617,10 +341,31 @@ class Database {
               AND correctas + errores > 0
         `);
 
+        await conexion.runAsync(`
+            UPDATE respuestas
+            SET es_correcta = 0
+            WHERE es_correcta = 1
+              AND id NOT IN (
+                  SELECT MIN(id)
+                  FROM respuestas
+                  WHERE es_correcta = 1
+                  GROUP BY pregunta_id
+              )
+        `);
+
         await conexion.execAsync(`
             CREATE UNIQUE INDEX IF NOT EXISTS idx_respuesta_correcta_unica
             ON respuestas (pregunta_id)
             WHERE es_correcta = 1;
+
+            CREATE INDEX IF NOT EXISTS idx_resultados_leccion_usuario_fecha
+            ON resultados_leccion (usuario_id, fecha_resultado);
+
+            DROP INDEX IF EXISTS idx_resultados_leccion_usuario;
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_resultado_clave_intento
+            ON resultados_leccion (usuario_id, clave_intento)
+            WHERE clave_intento IS NOT NULL;
 
             CREATE TRIGGER IF NOT EXISTS trg_validar_resultado_leccion
             BEFORE INSERT ON resultados_leccion
@@ -633,6 +378,10 @@ class Database {
                 );
             END;
         `);
+
+        await conexion.execAsync(
+            `PRAGMA user_version = ${DB_SCHEMA_VERSION};`
+        );
     }
 
     static async sembrarCatalogoRecursos() {
@@ -678,21 +427,39 @@ class Database {
 
     static async inicializarRecursosUsuariosExistentes() {
         const conexion = this.obtenerConexion();
-        const usuarios = await conexion.getAllAsync("SELECT id FROM usuarios");
 
-        for (const usuario of usuarios) {
-            await this.inicializarRecursosUsuario(usuario.id);
-        }
+        await conexion.runAsync(`
+            INSERT OR IGNORE INTO recursos_usuario (
+                usuario_id,
+                recurso_id,
+                cantidad
+            )
+            SELECT usuarios.id, tipos_recurso.id, 0
+            FROM usuarios
+            CROSS JOIN tipos_recurso
+        `);
     }
 
     static async sembrarDatosIniciales() {
         const conexion = this.obtenerConexion();
-        const totalLecciones = await conexion.getFirstAsync(
-            "SELECT COUNT(*) AS total FROM lecciones"
+        const firmaContenido = await Crypto.digestStringAsync(
+            Crypto.CryptoDigestAlgorithm.SHA256,
+            JSON.stringify({
+                mundos: SEED_MUNDOS,
+                dificultades: SEED_DIFICULTADES,
+                lecciones: SEED_LECCIONES,
+            })
+        );
+        const firmaGuardada = await conexion.getFirstAsync(
+            `
+            SELECT valor
+            FROM metadatos_app
+            WHERE clave = 'firma_contenido_inicial'
+            `
         );
 
-        if ((totalLecciones?.total ?? 0) > 0) {
-            return;
+        if (firmaGuardada?.valor === firmaContenido) {
+            return false;
         }
 
         await conexion.withTransactionAsync(async () => {
@@ -701,6 +468,9 @@ class Database {
                     `
                     INSERT INTO mundos (id, nombre, orden)
                     VALUES (?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        nombre = excluded.nombre,
+                        orden = excluded.orden
                     `,
                     [mundo.id, mundo.nombre, mundo.orden]
                 );
@@ -711,6 +481,8 @@ class Database {
                     `
                     INSERT INTO dificultades (id, nombre)
                     VALUES (?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        nombre = excluded.nombre
                     `,
                     [dificultad.id, dificultad.nombre]
                 );
@@ -728,6 +500,12 @@ class Database {
                         orden
                     )
                     VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        mundo_id = excluded.mundo_id,
+                        dificultad_id = excluded.dificultad_id,
+                        nombre = excluded.nombre,
+                        descripcion = excluded.descripcion,
+                        orden = excluded.orden
                     `,
                     [
                         leccion.id,
@@ -739,9 +517,23 @@ class Database {
                     ]
                 );
 
-                for (let preguntaIndex = 0; preguntaIndex < leccion.preguntas.length; preguntaIndex++) {
+                await conexion.runAsync(
+                    `
+                    DELETE FROM preguntas
+                    WHERE leccion_id = ? AND orden > ?
+                    `,
+                    [leccion.id, leccion.preguntas.length]
+                );
+
+                for (
+                    let preguntaIndex = 0;
+                    preguntaIndex < leccion.preguntas.length;
+                    preguntaIndex += 1
+                ) {
                     const pregunta = leccion.preguntas[preguntaIndex];
-                    const preguntaResult = await conexion.runAsync(
+                    const ordenPregunta = preguntaIndex + 1;
+
+                    await conexion.runAsync(
                         `
                         INSERT INTO preguntas (
                             leccion_id,
@@ -751,19 +543,47 @@ class Database {
                             orden
                         )
                         VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(leccion_id, orden) DO UPDATE SET
+                            texto = excluded.texto,
+                            instruccion = excluded.instruccion,
+                            pista = excluded.pista
                         `,
                         [
                             leccion.id,
                             pregunta.texto,
                             pregunta.instruccion,
                             pregunta.pista,
-                            preguntaIndex + 1,
+                            ordenPregunta,
                         ]
                     );
 
-                    const preguntaId = preguntaResult.lastInsertRowId;
+                    const preguntaGuardada = await conexion.getFirstAsync(
+                        `
+                        SELECT id
+                        FROM preguntas
+                        WHERE leccion_id = ? AND orden = ?
+                        `,
+                        [leccion.id, ordenPregunta]
+                    );
+                    const preguntaId = preguntaGuardada.id;
 
-                    for (let respuestaIndex = 0; respuestaIndex < pregunta.respuestas.length; respuestaIndex++) {
+                    await conexion.runAsync(
+                        `
+                        DELETE FROM respuestas
+                        WHERE pregunta_id = ? AND orden > ?
+                        `,
+                        [preguntaId, pregunta.respuestas.length]
+                    );
+                    await conexion.runAsync(
+                        "UPDATE respuestas SET es_correcta = 0 WHERE pregunta_id = ?",
+                        [preguntaId]
+                    );
+
+                    for (
+                        let respuestaIndex = 0;
+                        respuestaIndex < pregunta.respuestas.length;
+                        respuestaIndex += 1
+                    ) {
                         const respuesta = pregunta.respuestas[respuestaIndex];
 
                         await conexion.runAsync(
@@ -775,6 +595,9 @@ class Database {
                                 orden
                             )
                             VALUES (?, ?, ?, ?)
+                            ON CONFLICT(pregunta_id, orden) DO UPDATE SET
+                                texto = excluded.texto,
+                                es_correcta = excluded.es_correcta
                             `,
                             [
                                 preguntaId,
@@ -786,7 +609,18 @@ class Database {
                     }
                 }
             }
+
+            await conexion.runAsync(
+                `
+                INSERT INTO metadatos_app (clave, valor)
+                VALUES ('firma_contenido_inicial', ?)
+                ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor
+                `,
+                [firmaContenido]
+            );
         });
+
+        return true;
     }
 
     static async crearHashContrasena(contrasena, salt = Crypto.randomUUID()) {
@@ -802,37 +636,148 @@ class Database {
     }
 
     static async registrarUsuario(usuario) {
+        return ejecutarEscrituraSerializada(() =>
+            this.registrarUsuarioInterno(usuario)
+        );
+    }
+
+    static async registrarUsuarioInterno(usuario) {
         const conexion = this.obtenerConexion();
         const fechaActual = nowISO();
+        const nombre = String(usuario?.nombre ?? "").trim();
+        const correo = String(usuario?.correo ?? "").trim().toLowerCase();
+        const contrasena = String(usuario?.contrasena ?? "");
 
-        const usuarioExistente = await conexion.getFirstAsync(
-            `
-            SELECT id, nombre, correo
-            FROM usuarios
-            WHERE LOWER(nombre) = LOWER(?)
-               OR LOWER(correo) = LOWER(?)
-            LIMIT 1
-            `,
-            [usuario.nombre, usuario.correo]
-        );
-
-        if (usuarioExistente) {
-            if (usuarioExistente.nombre.toLowerCase() === usuario.nombre.toLowerCase()) {
-                throw new Error("Ese nombre de usuario ya está registrado.");
-            }
-
-            throw new Error("Ese correo electrónico ya está registrado.");
+        if (!nombre || !correo || !contrasena) {
+            throw new Error("Los datos de registro están incompletos.");
         }
 
-        const contrasenaProcesada = await this.crearHashContrasena(usuario.contrasena);
+        const contrasenaProcesada = await this.crearHashContrasena(contrasena);
+        let usuarioId = null;
 
-        const resultado = await conexion.runAsync(
+        await conexion.withTransactionAsync(async () => {
+            const usuarioExistente = await conexion.getFirstAsync(
+                `
+                SELECT id, nombre, correo
+                FROM usuarios
+                WHERE LOWER(nombre) = LOWER(?)
+                   OR LOWER(correo) = LOWER(?)
+                LIMIT 1
+                `,
+                [nombre, correo]
+            );
+
+            if (usuarioExistente) {
+                if (
+                    usuarioExistente.nombre.toLowerCase() ===
+                    nombre.toLowerCase()
+                ) {
+                    throw new Error("Ese nombre de usuario ya está registrado.");
+                }
+
+                throw new Error("Ese correo electrónico ya está registrado.");
+            }
+
+            const resultado = await conexion.runAsync(
+                `
+                INSERT INTO usuarios (
+                    nombre,
+                    correo,
+                    contrasena_hash,
+                    contrasena_salt,
+                    fecha_registro,
+                    ultima_sesion,
+                    puntaje,
+                    mayor_racha,
+                    racha_actual,
+                    fecha_ultima_actividad,
+                    energia,
+                    energia_actualizada_en
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `,
+                [
+                    nombre,
+                    correo,
+                    contrasenaProcesada.hash,
+                    contrasenaProcesada.salt,
+                    fechaActual,
+                    fechaActual,
+                    usuario.puntaje ?? 0,
+                    usuario.mayorRacha ?? 0,
+                    usuario.rachaActual ?? 0,
+                    null,
+                    usuario.energia ?? MAX_VIDAS,
+                    null,
+                ]
+            );
+
+            usuarioId = resultado.lastInsertRowId;
+            await this.inicializarProgresoUsuario(usuarioId);
+            await this.inicializarRecursosUsuario(usuarioId);
+            await this.registrarActividadDiariaInterna(conexion, usuarioId);
+        });
+
+        return this.obtenerUsuarioPorId(usuarioId);
+    }
+
+    static async iniciarSesion(nombre, contrasena) {
+        return ejecutarEscrituraSerializada(async () => {
+            const conexion = this.obtenerConexion();
+            const nombreLimpio = String(nombre ?? "").trim();
+            const contrasenaLimpia = String(contrasena ?? "");
+
+            if (!nombreLimpio || !contrasenaLimpia) {
+                throw new Error("Ingresa tu usuario y contraseña.");
+            }
+
+            const usuarioEncontrado = await conexion.getFirstAsync(
+                `
+                SELECT id, contrasena_hash, contrasena_salt
+                FROM usuarios
+                WHERE LOWER(nombre) = LOWER(?)
+                LIMIT 1
+                `,
+                [nombreLimpio]
+            );
+
+            if (!usuarioEncontrado) {
+                throw new Error("El usuario no existe.");
+            }
+
+            const contrasenaProcesada = await this.crearHashContrasena(
+                contrasenaLimpia,
+                usuarioEncontrado.contrasena_salt
+            );
+
+            if (contrasenaProcesada.hash !== usuarioEncontrado.contrasena_hash) {
+                throw new Error("La contraseña es incorrecta.");
+            }
+
+            await conexion.withTransactionAsync(async () => {
+                await conexion.runAsync(
+                    "UPDATE usuarios SET ultima_sesion = ? WHERE id = ?",
+                    [nowISO(), usuarioEncontrado.id]
+                );
+                await this.registrarActividadDiariaInterna(
+                    conexion,
+                    usuarioEncontrado.id
+                );
+            });
+
+            return this.obtenerUsuarioPorId(usuarioEncontrado.id);
+        });
+    }
+
+    static async obtenerUsuarioPorId(usuarioId) {
+        const conexion = this.obtenerConexion();
+
+        return conexion.getFirstAsync(
             `
-            INSERT INTO usuarios (
+            SELECT
+                id,
                 nombre,
                 correo,
-                contrasena_hash,
-                contrasena_salt,
                 fecha_registro,
                 ultima_sesion,
                 puntaje,
@@ -841,39 +786,6 @@ class Database {
                 fecha_ultima_actividad,
                 energia,
                 energia_actualizada_en
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `,
-            [
-                usuario.nombre,
-                usuario.correo,
-                contrasenaProcesada.hash,
-                contrasenaProcesada.salt,
-                fechaActual,
-                fechaActual,
-                usuario.puntaje ?? 0,
-                usuario.mayorRacha ?? 0,
-                usuario.rachaActual ?? 0,
-                null,
-                usuario.energia ?? MAX_ENERGIA,
-                null,
-            ]
-        );
-
-        const usuarioId = resultado.lastInsertRowId;
-        await this.inicializarProgresoUsuario(usuarioId);
-        await this.inicializarRecursosUsuario(usuarioId);
-        await this.registrarActividadDiaria(usuarioId);
-
-        return this.obtenerUsuarioPorId(usuarioId);
-    }
-
-    static async obtenerUsuarioPorId(usuarioId) {
-        const conexion = this.obtenerConexion();
-
-        return conexion.getFirstAsync(
-            `
-            SELECT *
             FROM usuarios
             WHERE id = ?
             `,
@@ -883,14 +795,232 @@ class Database {
 
     static async registrarActividadDiaria(usuarioId) {
         const conexion = this.obtenerConexion();
+        return ejecutarEscrituraSerializada(async () => {
+            let resultadoRacha = null;
+
+            await conexion.withTransactionAsync(async () => {
+                resultadoRacha = await this.registrarActividadDiariaInterna(
+                    conexion,
+                    usuarioId
+                );
+            });
+
+            return resultadoRacha;
+        });
+    }
+
+    static async registrarActividadDiariaInterna(conexion, usuarioId) {
         const fechaHoy = obtenerFechaLocal();
         const fechaActual = nowISO();
-        let resultadoRacha = null;
+
+        const usuario = await conexion.getFirstAsync(
+            `
+            SELECT racha_actual, mayor_racha, fecha_ultima_actividad
+            FROM usuarios
+            WHERE id = ?
+            `,
+            [usuarioId]
+        );
+
+        if (!usuario) {
+            throw new Error("El usuario no existe.");
+        }
+
+        const actividadExistente = await conexion.getFirstAsync(
+            `
+            SELECT 1 AS existe
+            FROM actividad_diaria
+            WHERE usuario_id = ? AND fecha_local = ?
+            LIMIT 1
+            `,
+            [usuarioId, fechaHoy]
+        );
+
+        if (actividadExistente) {
+            return {
+                rachaActual: usuario.racha_actual,
+                mayorRacha: usuario.mayor_racha,
+                fechaUltimaActividad: usuario.fecha_ultima_actividad,
+            };
+        }
+
+        await conexion.runAsync(
+            `
+            INSERT INTO actividad_diaria (
+                usuario_id,
+                fecha_local,
+                fecha_registro
+            )
+            VALUES (?, ?, ?)
+            `,
+            [usuarioId, fechaHoy, fechaActual]
+        );
+
+        const diferenciaDias = calcularDiferenciaDias(
+            usuario.fecha_ultima_actividad,
+            fechaHoy
+        );
+        const rachaActual =
+            diferenciaDias === 1 ? usuario.racha_actual + 1 : 1;
+        const mayorRacha = Math.max(usuario.mayor_racha, rachaActual);
+
+        await conexion.runAsync(
+            `
+            UPDATE usuarios
+            SET racha_actual = ?,
+                mayor_racha = ?,
+                fecha_ultima_actividad = ?,
+                ultima_sesion = ?
+            WHERE id = ?
+            `,
+            [rachaActual, mayorRacha, fechaHoy, fechaActual, usuarioId]
+        );
+
+        return {
+            rachaActual,
+            mayorRacha,
+            fechaUltimaActividad: fechaHoy,
+        };
+    }
+
+    static async regenerarEnergia(usuarioId) {
+        return ejecutarEscrituraSerializada(() =>
+            this.regenerarEnergiaInterna(usuarioId)
+        );
+    }
+
+    static async regenerarEnergiaInterna(usuarioId) {
+        const conexion = this.obtenerConexion();
+        const usuario = await conexion.getFirstAsync(
+            `
+            SELECT energia, energia_actualizada_en
+            FROM usuarios
+            WHERE id = ?
+            `,
+            [usuarioId]
+        );
+
+        if (!usuario) {
+            throw new Error("El usuario no existe.");
+        }
+
+        const resultado = calcularRegeneracionEnergia({
+            energia: usuario.energia,
+            marcaTiempo: usuario.energia_actualizada_en,
+        });
+
+        if (resultado.requierePersistencia) {
+            await conexion.runAsync(
+                `
+                UPDATE usuarios
+                SET energia = ?, energia_actualizada_en = ?
+                WHERE id = ?
+                `,
+                [
+                    resultado.energia,
+                    resultado.marcaTiempo === null
+                        ? null
+                        : new Date(resultado.marcaTiempo).toISOString(),
+                    usuarioId,
+                ]
+            );
+        }
+
+        return {
+            energia: resultado.energia,
+            segundosParaSiguienteVida:
+                resultado.segundosParaSiguienteVida,
+        };
+    }
+
+    static async descontarVida(usuarioId) {
+        return ejecutarEscrituraSerializada(async () => {
+            await this.regenerarEnergiaInterna(usuarioId);
+
+            const conexion = this.obtenerConexion();
+            let resultadoDescuento = null;
+
+            await conexion.withTransactionAsync(async () => {
+                const usuario = await conexion.getFirstAsync(
+                    `
+                    SELECT energia, energia_actualizada_en
+                    FROM usuarios
+                    WHERE id = ?
+                    `,
+                    [usuarioId]
+                );
+
+                if (!usuario) {
+                    throw new Error("El usuario no existe.");
+                }
+
+                const energiaActual = Math.max(
+                    0,
+                    Math.min(Number(usuario.energia) || 0, MAX_VIDAS)
+                );
+
+                if (energiaActual <= 0) {
+                    resultadoDescuento = {
+                        energia: 0,
+                        sinVidas: true,
+                        segundosParaSiguienteVida: 0,
+                    };
+                    return;
+                }
+
+                const nuevaEnergia = energiaActual - 1;
+                const inicioRegeneracion =
+                    usuario.energia_actualizada_en ?? nowISO();
+
+                await conexion.runAsync(
+                    `
+                    UPDATE usuarios
+                    SET energia = ?, energia_actualizada_en = ?
+                    WHERE id = ?
+                    `,
+                    [nuevaEnergia, inicioRegeneracion, usuarioId]
+                );
+
+                const marcaTiempo = Date.parse(inicioRegeneracion);
+                const regeneracion = calcularRegeneracionEnergia({
+                    energia: nuevaEnergia,
+                    marcaTiempo,
+                });
+
+                resultadoDescuento = {
+                    energia: nuevaEnergia,
+                    sinVidas: nuevaEnergia === 0,
+                    segundosParaSiguienteVida:
+                        regeneracion.segundosParaSiguienteVida,
+                };
+            });
+
+            return resultadoDescuento;
+        });
+    }
+
+    static async comprarUnaVidaConCristales(usuarioId) {
+        return ejecutarEscrituraSerializada(() =>
+            this.comprarUnaVidaConCristalesInterna(usuarioId)
+        );
+    }
+
+    static async comprarUnaVidaConCristalesInterna(usuarioId) {
+        if (!usuarioId) {
+            throw new Error("No se proporcionó un usuario válido.");
+        }
+
+        await this.regenerarEnergiaInterna(usuarioId);
+
+        const conexion = this.obtenerConexion();
+        let resultadoCompra = null;
 
         await conexion.withTransactionAsync(async () => {
+            await this.inicializarRecursosUsuario(usuarioId);
+
             const usuario = await conexion.getFirstAsync(
                 `
-                SELECT racha_actual, mayor_racha, fecha_ultima_actividad
+                SELECT energia, energia_actualizada_en
                 FROM usuarios
                 WHERE id = ?
                 `,
@@ -901,227 +1031,96 @@ class Database {
                 throw new Error("El usuario no existe.");
             }
 
-            const actividadInsertada = await conexion.runAsync(
-                `
-                INSERT OR IGNORE INTO actividad_diaria (
-                    usuario_id,
-                    fecha_local,
-                    fecha_registro
-                )
-                VALUES (?, ?, ?)
-                `,
-                [usuarioId, fechaHoy, fechaActual]
+            const energiaActual = Math.max(
+                0,
+                Math.min(Number(usuario.energia) || 0, MAX_VIDAS)
             );
 
-            if (actividadInsertada.changes === 0) {
-                await conexion.runAsync(
-                    "UPDATE usuarios SET ultima_sesion = ? WHERE id = ?",
-                    [fechaActual, usuarioId]
-                );
-
-                resultadoRacha = {
-                    rachaActual: usuario.racha_actual,
-                    mayorRacha: usuario.mayor_racha,
-                    fechaUltimaActividad: usuario.fecha_ultima_actividad,
-                };
-                return;
+            if (energiaActual >= MAX_VIDAS) {
+                const error = new Error("Ya tienes todas las vidas.");
+                error.code = "VIDAS_COMPLETAS";
+                throw error;
             }
 
-            const diferenciaDias = calcularDiferenciaDias(
-                usuario.fecha_ultima_actividad,
-                fechaHoy
-            );
-            const rachaActual = diferenciaDias === 1
-                ? usuario.racha_actual + 1
-                : 1;
-            const mayorRacha = Math.max(usuario.mayor_racha, rachaActual);
-
-            await conexion.runAsync(
+            const recurso = await conexion.getFirstAsync(
                 `
-                UPDATE usuarios
-                SET racha_actual = ?,
-                    mayor_racha = ?,
-                    fecha_ultima_actividad = ?,
-                    ultima_sesion = ?
-                WHERE id = ?
+                SELECT cantidad
+                FROM recursos_usuario
+                WHERE usuario_id = ? AND recurso_id = 'cristal'
                 `,
-                [rachaActual, mayorRacha, fechaHoy, fechaActual, usuarioId]
+                [usuarioId]
             );
 
-            resultadoRacha = {
-                rachaActual,
-                mayorRacha,
-                fechaUltimaActividad: fechaHoy,
-            };
-        });
+            const cristalesActuales = Math.max(0, Number(recurso?.cantidad) || 0);
 
-        return resultadoRacha;
-    }
-
-    static async regenerarEnergia(usuarioId) {
-        const conexion = this.obtenerConexion();
-        const usuario = await conexion.getFirstAsync(
-            `
-            SELECT energia, energia_actualizada_en
-            FROM usuarios
-            WHERE id = ?
-            `,
-            [usuarioId]
-        );
-
-        if (!usuario) {
-            throw new Error("El usuario no existe.");
-        }
-
-        const energiaActual = Math.max(
-            0,
-            Math.min(Number(usuario.energia) || 0, MAX_ENERGIA)
-        );
-
-        if (energiaActual >= MAX_ENERGIA) {
-            if (usuario.energia_actualizada_en) {
-                await conexion.runAsync(
-                    `
-                    UPDATE usuarios
-                    SET energia = ?, energia_actualizada_en = NULL
-                    WHERE id = ?
-                    `,
-                    [MAX_ENERGIA, usuarioId]
-                );
+            if (cristalesActuales < COSTO_VIDA_CRISTALES) {
+                const error = new Error("No tienes suficientes cristales.");
+                error.code = "CRISTALES_INSUFICIENTES";
+                throw error;
             }
 
-            return {
-                energia: MAX_ENERGIA,
-                segundosParaSiguienteVida: 0,
-            };
-        }
-
-        const ahora = Date.now();
-        const marcaTiempo = Date.parse(usuario.energia_actualizada_en ?? "");
-
-        if (!Number.isFinite(marcaTiempo)) {
+            const nuevaEnergia = energiaActual + 1;
+            const nuevosCristales = cristalesActuales - COSTO_VIDA_CRISTALES;
             const fechaActual = nowISO();
 
             await conexion.runAsync(
                 `
-                UPDATE usuarios
-                SET energia_actualizada_en = ?
-                WHERE id = ?
+                UPDATE recursos_usuario
+                SET cantidad = ?
+                WHERE usuario_id = ? AND recurso_id = 'cristal'
                 `,
-                [fechaActual, usuarioId]
+                [nuevosCristales, usuarioId]
             );
 
-            return {
-                energia: energiaActual,
-                segundosParaSiguienteVida: Math.ceil(
-                    INTERVALO_REGENERACION_ENERGIA_MS / 1000
-                ),
-            };
-        }
-
-        const intervalosCompletos = Math.floor(
-            Math.max(0, ahora - marcaTiempo) /
-                INTERVALO_REGENERACION_ENERGIA_MS
-        );
-
-        let nuevaEnergia = energiaActual;
-        let nuevaMarcaTiempo = marcaTiempo;
-
-        if (intervalosCompletos > 0) {
-            nuevaEnergia = Math.min(
-                MAX_ENERGIA,
-                energiaActual + intervalosCompletos
+            await conexion.runAsync(
+                `
+                INSERT INTO movimientos_recurso (
+                    usuario_id,
+                    recurso_id,
+                    cantidad,
+                    motivo,
+                    leccion_id,
+                    clave_unica,
+                    fecha_movimiento
+                )
+                VALUES (?, 'cristal', ?, 'compra_vida', NULL, NULL, ?)
+                `,
+                [usuarioId, -COSTO_VIDA_CRISTALES, fechaActual]
             );
-
-            nuevaMarcaTiempo =
-                marcaTiempo +
-                intervalosCompletos * INTERVALO_REGENERACION_ENERGIA_MS;
 
             await conexion.runAsync(
                 `
                 UPDATE usuarios
-                SET energia = ?, energia_actualizada_en = ?
+                SET energia = ?,
+                    energia_actualizada_en = ?
                 WHERE id = ?
                 `,
                 [
                     nuevaEnergia,
-                    nuevaEnergia >= MAX_ENERGIA
+                    nuevaEnergia >= MAX_VIDAS
                         ? null
-                        : new Date(nuevaMarcaTiempo).toISOString(),
+                        : usuario.energia_actualizada_en,
                     usuarioId,
                 ]
             );
-        }
 
-        if (nuevaEnergia >= MAX_ENERGIA) {
-            return {
-                energia: MAX_ENERGIA,
-                segundosParaSiguienteVida: 0,
+            resultadoCompra = {
+                energia: nuevaEnergia,
+                cristales: nuevosCristales,
+                costo: COSTO_VIDA_CRISTALES,
             };
-        }
+        });
 
-        const siguienteVidaEn =
-            nuevaMarcaTiempo + INTERVALO_REGENERACION_ENERGIA_MS;
+        const energiaActualizada = await this.regenerarEnergiaInterna(usuarioId);
 
         return {
-            energia: nuevaEnergia,
-            segundosParaSiguienteVida: Math.max(
-                1,
-                Math.ceil((siguienteVidaEn - ahora) / 1000)
-            ),
-        };
-    }
-
-    static async descontarVida(usuarioId) {
-        await this.regenerarEnergia(usuarioId);
-
-        const conexion = this.obtenerConexion();
-        const usuario = await conexion.getFirstAsync(
-            `
-            SELECT energia, energia_actualizada_en
-            FROM usuarios
-            WHERE id = ?
-            `,
-            [usuarioId]
-        );
-
-        if (!usuario) {
-            throw new Error("El usuario no existe.");
-        }
-
-        const energiaActual = Math.max(
-            0,
-            Math.min(Number(usuario.energia) || 0, MAX_ENERGIA)
-        );
-
-        if (energiaActual <= 0) {
-            return {
-                energia: 0,
-                sinVidas: true,
-            };
-        }
-
-        const nuevaEnergia = energiaActual - 1;
-        const inicioRegeneracion = usuario.energia_actualizada_en ?? nowISO();
-
-        await conexion.runAsync(
-            `
-            UPDATE usuarios
-            SET energia = ?, energia_actualizada_en = ?
-            WHERE id = ?
-            `,
-            [nuevaEnergia, inicioRegeneracion, usuarioId]
-        );
-
-        return {
-            energia: nuevaEnergia,
-            sinVidas: nuevaEnergia === 0,
+            ...resultadoCompra,
+            segundosParaSiguienteVida:
+                energiaActualizada.segundosParaSiguienteVida,
         };
     }
 
     static async obtenerRecursosUsuario(usuarioId) {
-        await this.inicializarRecursosUsuario(usuarioId);
-
         const conexion = this.obtenerConexion();
         const recursos = await conexion.getAllAsync(
             `
@@ -1132,31 +1131,16 @@ class Database {
             [usuarioId]
         );
 
-        const resultado = {
-            cristales: 0,
-            pergaminos: 0,
-        };
-
-        for (const recurso of recursos) {
-            if (recurso.recursoId === "cristal") {
-                resultado.cristales = recurso.cantidad;
-            }
-
-            if (recurso.recursoId === "pergamino") {
-                resultado.pergaminos = recurso.cantidad;
-            }
-        }
-
-        return resultado;
+        return mapearRecursos(recursos);
     }
 
     static async obtenerEstadoJugador(
         usuarioId,
-        { registrarActividad = true } = {}
+        { registrarActividad = false } = {}
     ) {
         if (!usuarioId) {
             return {
-                energia: MAX_ENERGIA,
+                energia: MAX_VIDAS,
                 rachaActual: 0,
                 mayorRacha: 0,
                 cristales: 0,
@@ -1165,62 +1149,98 @@ class Database {
             };
         }
 
-        if (registrarActividad) {
-            await this.registrarActividadDiaria(usuarioId);
-        }
+        return ejecutarEscrituraSerializada(async () => {
+            const conexion = this.obtenerConexion();
 
-        const energia = await this.regenerarEnergia(usuarioId);
-        const recursos = await this.obtenerRecursosUsuario(usuarioId);
-        const usuario = await this.obtenerUsuarioPorId(usuarioId);
+            if (registrarActividad) {
+                await conexion.withTransactionAsync(() =>
+                    this.registrarActividadDiariaInterna(conexion, usuarioId)
+                );
+            }
 
-        return {
-            energia: energia.energia,
-            segundosParaSiguienteVida: energia.segundosParaSiguienteVida,
-            rachaActual: usuario?.racha_actual ?? 0,
-            mayorRacha: usuario?.mayor_racha ?? 0,
-            cristales: recursos.cristales,
-            pergaminos: recursos.pergaminos,
-        };
+            const energia = await this.regenerarEnergiaInterna(usuarioId);
+            const [recursos, usuario] = await Promise.all([
+                this.obtenerRecursosUsuario(usuarioId),
+                this.obtenerUsuarioPorId(usuarioId),
+            ]);
+
+            return {
+                energia: energia.energia,
+                segundosParaSiguienteVida:
+                    energia.segundosParaSiguienteVida,
+                rachaActual: usuario?.racha_actual ?? 0,
+                mayorRacha: usuario?.mayor_racha ?? 0,
+                cristales: recursos.cristales,
+                pergaminos: recursos.pergaminos,
+            };
+        });
     }
 
     static async inicializarProgresoUsuario(usuarioId) {
         const conexion = this.obtenerConexion();
-        const lecciones = await conexion.getAllAsync(
-            `
-            SELECT id, orden
-            FROM lecciones
-            ORDER BY mundo_id, orden
-            `
-        );
-
         const fechaActual = nowISO();
 
-        for (const leccion of lecciones) {
-            const desbloqueada = leccion.orden === 1 ? 1 : 0;
+        await conexion.runAsync(
+            `
+            INSERT OR IGNORE INTO progreso_leccion (
+                usuario_id,
+                leccion_id,
+                desbloqueada,
+                completada,
+                mejor_precision,
+                mejor_tiempo_segundos,
+                intentos,
+                fecha_desbloqueo,
+                fecha_completado
+            )
+            SELECT
+                ?,
+                lecciones.id,
+                CASE WHEN lecciones.orden = 1 THEN 1 ELSE 0 END,
+                0,
+                0,
+                NULL,
+                0,
+                CASE WHEN lecciones.orden = 1 THEN ? ELSE NULL END,
+                NULL
+            FROM lecciones
+            `,
+            [usuarioId, fechaActual]
+        );
+    }
 
-            await conexion.runAsync(
-                `
-                INSERT OR IGNORE INTO progreso_leccion (
-                    usuario_id,
-                    leccion_id,
-                    desbloqueada,
-                    completada,
-                    mejor_precision,
-                    mejor_tiempo_segundos,
-                    intentos,
-                    fecha_desbloqueo,
-                    fecha_completado
-                )
-                VALUES (?, ?, ?, 0, 0, NULL, 0, ?, NULL)
-                `,
-                [
-                    usuarioId,
-                    leccion.id,
-                    desbloqueada,
-                    desbloqueada ? fechaActual : null,
-                ]
-            );
-        }
+    static async inicializarProgresoUsuariosExistentes() {
+        const conexion = this.obtenerConexion();
+        const fechaActual = nowISO();
+
+        await conexion.runAsync(
+            `
+            INSERT OR IGNORE INTO progreso_leccion (
+                usuario_id,
+                leccion_id,
+                desbloqueada,
+                completada,
+                mejor_precision,
+                mejor_tiempo_segundos,
+                intentos,
+                fecha_desbloqueo,
+                fecha_completado
+            )
+            SELECT
+                usuarios.id,
+                lecciones.id,
+                CASE WHEN lecciones.orden = 1 THEN 1 ELSE 0 END,
+                0,
+                0,
+                NULL,
+                0,
+                CASE WHEN lecciones.orden = 1 THEN ? ELSE NULL END,
+                NULL
+            FROM usuarios
+            CROSS JOIN lecciones
+            `,
+            [fechaActual]
+        );
     }
 
     static async obtenerMundo(mundoId = 1) {
@@ -1238,10 +1258,6 @@ class Database {
 
     static async obtenerLeccionesPorMundo(usuarioId, mundoId = 1) {
         const conexion = this.obtenerConexion();
-
-        if (usuarioId) {
-            await this.inicializarProgresoUsuario(usuarioId);
-        }
 
         return conexion.getAllAsync(
             `
@@ -1301,50 +1317,58 @@ class Database {
             datosLeccion.orden
         );
 
-        const preguntas = await conexion.getAllAsync(
+        const filasPreguntas = await conexion.getAllAsync(
             `
-            SELECT *
-            FROM preguntas
-            WHERE leccion_id = ?
-            ORDER BY orden ASC
-            LIMIT 10
+            WITH preguntas_seleccionadas AS (
+                SELECT id, texto, instruccion, pista, orden
+                FROM preguntas
+                WHERE leccion_id = ?
+                ORDER BY orden ASC
+                LIMIT 10
+            )
+            SELECT
+                p.id AS preguntaId,
+                p.texto AS preguntaTexto,
+                p.instruccion,
+                p.pista,
+                p.orden AS preguntaOrden,
+                r.id AS respuestaId,
+                r.texto AS respuestaTexto,
+                r.es_correcta AS respuestaCorrecta,
+                r.orden AS respuestaOrden
+            FROM preguntas_seleccionadas p
+            LEFT JOIN respuestas r ON r.pregunta_id = p.id
+            ORDER BY p.orden ASC, r.orden ASC
             `,
             [idLeccion]
         );
 
-        for (const datosPregunta of preguntas) {
-            const pregunta = new Pregunta(
-                datosPregunta.id,
-                datosPregunta.texto,
-                datosPregunta.instruccion,
-                datosPregunta.pista ?? "",
-                [],
-                null,
-                datosPregunta.orden
-            );
+        let preguntaActual = null;
 
-            const respuestas = await conexion.getAllAsync(
-                `
-                SELECT *
-                FROM respuestas
-                WHERE pregunta_id = ?
-                ORDER BY orden ASC
-                `,
-                [datosPregunta.id]
-            );
-
-            for (const datosRespuesta of respuestas) {
-                const respuesta = new Respuesta(
-                    datosRespuesta.id,
-                    datosRespuesta.texto,
-                    datosRespuesta.es_correcta === 1,
-                    datosRespuesta.orden
+        for (const fila of filasPreguntas) {
+            if (!preguntaActual || preguntaActual.id !== fila.preguntaId) {
+                preguntaActual = new Pregunta(
+                    fila.preguntaId,
+                    fila.preguntaTexto,
+                    fila.instruccion,
+                    fila.pista ?? "",
+                    [],
+                    null,
+                    fila.preguntaOrden
                 );
-
-                pregunta.agregarRespuesta(respuesta);
+                leccion.agregarPregunta(preguntaActual);
             }
 
-            leccion.agregarPregunta(pregunta);
+            if (fila.respuestaId !== null) {
+                const respuesta = new Respuesta(
+                    fila.respuestaId,
+                    fila.respuestaTexto,
+                    fila.respuestaCorrecta === 1,
+                    fila.respuestaOrden
+                );
+
+                preguntaActual.agregarRespuesta(respuesta);
+            }
         }
 
         return leccion;
@@ -1360,7 +1384,13 @@ class Database {
         return leccion.toPlainObject();
     }
 
-    static async finalizarLeccion({
+    static async finalizarLeccion(parametros) {
+        return ejecutarEscrituraSerializada(() =>
+            this.finalizarLeccionInterna(parametros)
+        );
+    }
+
+    static async finalizarLeccionInterna({
         usuarioId,
         leccionId,
         correctas,
@@ -1370,9 +1400,25 @@ class Database {
         preguntasRespondidas = correctas + errores,
         completada = true,
         motivoFinalizacion = completada ? "completada" : "sin_vidas",
+        claveIntento = null,
     }) {
+        if (!usuarioId) {
+            throw new Error("No se proporcionó un usuario válido.");
+        }
+
         const conexion = this.obtenerConexion();
         const fechaActual = nowISO();
+        const claveIntentoNormalizada =
+            claveIntento === null
+                ? null
+                : String(claveIntento).trim();
+
+        if (
+            claveIntento !== null &&
+            (!claveIntentoNormalizada || claveIntentoNormalizada.length > 200)
+        ) {
+            throw new Error("La clave del intento no es válida.");
+        }
 
         const cantidades = [
             correctas,
@@ -1383,7 +1429,7 @@ class Database {
         ];
 
         if (cantidades.some((cantidad) => !Number.isInteger(cantidad) || cantidad < 0)) {
-            throw new Error("Las cantidades del resultado deben ser enteros positivos.");
+            throw new Error("Las cantidades del resultado deben ser enteros no negativos.");
         }
 
         if (
@@ -1393,9 +1439,15 @@ class Database {
             throw new Error("El resultado de la lección contiene datos inconsistentes.");
         }
 
-        const precision = totalPreguntas > 0
-            ? Math.round((correctas / totalPreguntas) * 100)
-            : 0;
+        if (completada && preguntasRespondidas !== totalPreguntas) {
+            throw new Error(
+                "Una lección completada debe incluir todas sus preguntas."
+            );
+        }
+
+        const precision = calcularPrecision(correctas, totalPreguntas);
+
+        await this.inicializarRecursosUsuario(usuarioId);
 
         let resultadoFinal = {
             precision,
@@ -1403,7 +1455,10 @@ class Database {
             motivoFinalizacion,
             cristalesGanados: 0,
             pergaminosGanados: 0,
-            recursos: await this.obtenerRecursosUsuario(usuarioId),
+            recursos: {
+                cristales: 0,
+                pergaminos: 0,
+            },
             siguienteLeccion: null,
             siguienteLeccionDesbloqueada: false,
         };
@@ -1422,6 +1477,75 @@ class Database {
                 throw new Error("La lección no existe.");
             }
 
+            if (claveIntentoNormalizada) {
+                const resultadoExistente = await conexion.getFirstAsync(
+                    `
+                    SELECT
+                        leccion_id AS leccionId,
+                        precision,
+                        completada,
+                        motivo_finalizacion AS motivoFinalizacion,
+                        cristales_ganados AS cristalesGanados,
+                        pergaminos_ganados AS pergaminosGanados
+                    FROM resultados_leccion
+                    WHERE usuario_id = ? AND clave_intento = ?
+                    LIMIT 1
+                    `,
+                    [usuarioId, claveIntentoNormalizada]
+                );
+
+                if (resultadoExistente) {
+                    if (
+                        Number(resultadoExistente.leccionId) !==
+                        Number(leccionId)
+                    ) {
+                        throw new Error(
+                            "La clave del intento ya pertenece a otra lección."
+                        );
+                    }
+
+                    const recursos = await conexion.getAllAsync(
+                        `
+                        SELECT recurso_id AS recursoId, cantidad
+                        FROM recursos_usuario
+                        WHERE usuario_id = ?
+                        `,
+                        [usuarioId]
+                    );
+                    const siguienteLeccion =
+                        resultadoExistente.completada === 1
+                            ? await conexion.getFirstAsync(
+                                  `
+                                  SELECT id, nombre, descripcion, orden,
+                                      mundo_id AS mundoId
+                                  FROM lecciones
+                                  WHERE mundo_id = ? AND orden = ?
+                                  LIMIT 1
+                                  `,
+                                  [
+                                      leccionActual.mundo_id,
+                                      leccionActual.orden + 1,
+                                  ]
+                              )
+                            : null;
+
+                    resultadoFinal = {
+                        precision: resultadoExistente.precision,
+                        completada: resultadoExistente.completada === 1,
+                        motivoFinalizacion:
+                            resultadoExistente.motivoFinalizacion,
+                        cristalesGanados:
+                            resultadoExistente.cristalesGanados,
+                        pergaminosGanados:
+                            resultadoExistente.pergaminosGanados,
+                        recursos: mapearRecursos(recursos),
+                        siguienteLeccion,
+                        siguienteLeccionDesbloqueada: false,
+                    };
+                    return;
+                }
+            }
+
             const progresoAnterior = await conexion.getFirstAsync(
                 `
                 SELECT completada
@@ -1434,7 +1558,7 @@ class Database {
             const primeraFinalizacion =
                 completada && progresoAnterior?.completada !== 1;
             const cristalesGanados = completada
-                ? (leccionActual.orden + 10) * correctas
+                ? calcularCristalesGanados(leccionActual.orden, correctas)
                 : 0;
 
             let pergaminosGanados = 0;
@@ -1470,9 +1594,10 @@ class Database {
                     motivo_finalizacion,
                     cristales_ganados,
                     pergaminos_ganados,
+                    clave_intento,
                     fecha_resultado
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `,
                 [
                     usuarioId,
@@ -1487,6 +1612,7 @@ class Database {
                     motivoFinalizacion,
                     cristalesGanados,
                     pergaminosGanados,
+                    claveIntentoNormalizada,
                     fechaActual,
                 ]
             );
@@ -1672,20 +1798,7 @@ class Database {
                 [usuarioId]
             );
 
-            const recursosActuales = {
-                cristales: 0,
-                pergaminos: 0,
-            };
-
-            for (const recurso of recursos) {
-                if (recurso.recursoId === "cristal") {
-                    recursosActuales.cristales = recurso.cantidad;
-                }
-
-                if (recurso.recursoId === "pergamino") {
-                    recursosActuales.pergaminos = recurso.cantidad;
-                }
-            }
+            const recursosActuales = mapearRecursos(recursos);
 
             resultadoFinal = {
                 precision,

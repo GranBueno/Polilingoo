@@ -14,18 +14,21 @@ import {
 } from '@expo-google-fonts/alegreya';
 
 export default function useAppFonts() {
-    const [cinzelLoaded] = useCinzelFonts({
+    const [cinzelLoaded, cinzelError] = useCinzelFonts({
         Cinzel_400Regular,
         Cinzel_700Bold,
         Cinzel_900Black,
     });
 
-    const [alegreyaLoaded] = useAlegreyaFonts({
+    const [alegreyaLoaded, alegreyaError] = useAlegreyaFonts({
         Alegreya_400Regular,
         Alegreya_500Medium,
         Alegreya_700Bold,
         Alegreya_400Regular_Italic,
     });
 
-    return cinzelLoaded && alegreyaLoaded;
+    return {
+        fontsLoaded: cinzelLoaded && alegreyaLoaded,
+        fontError: cinzelError ?? alegreyaError ?? null,
+    };
 }

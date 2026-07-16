@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useRef } from "react";
 import {
     View,
     Text,
@@ -7,12 +7,16 @@ import {
     Pressable,
     Image,
     useWindowDimensions,
-    AppState,
 } from "react-native";
+import { useIsFocused } from "@react-navigation/native";
 
 import WorldBottomNavbar from "../components/navbar/WorldBottomNavbar";
+import DebugGrid from "../components/layout/DebugGrid";
+import ParchmentSlip from "../components/ParchmentSlip";
+import usePlayerState from "../hooks/usePlayerState";
+import { MAX_VIDAS } from "../config/gameRules";
+import { formatDuration } from "../utils/time";
 import { globalStyles } from "../styles/styles";
-import Database from "../class/Database";
 
 const COLUMNAS = 11;
 const FILAS = 15;
@@ -22,25 +26,49 @@ const SHOW_GRID = false;
 
 const TOTAL_PREGUNTAS_DEFAULT = 5;
 
+// Título del resultado
+const TITLE_AREA = {
+    fila: 2,
+    columna: 2,
+    filas: 1,
+    columnas: 9,
+};
+
+// Recompensas: dos filas de altura, con medio espacio de columna a cada lado
+const REWARDS_AREA = {
+    fila: 4,
+    columna: 1,
+    filas: 2,
+    columnas: 11,
+    margenHorizontalColumnas: 0.5,
+};
+
+const REWARD_SHADOW = {
+    offsetX: 4,
+    offsetY: 5,
+    opacity: 0.3,
+};
+
 // Área superior donde viven los 3 slips
 const STATS_AREA = {
-    fila: 3,
+    fila: 12,
     columna: 1,
-    filas: 3,
+    filas: 2,
     columnas: 11,
 };
 
 // Imagen central del journal
 const JOURNAL_AREA = {
-    fila: 5,
+    fila: 4.4,
     columna: 2.5,
     filas: 8,
     columnas: 8,
 };
 
+
 // Botón entre journal y navbar inferior
 const RETURN_BUTTON_AREA = {
-    fila: 12,
+    fila: 10.5,
     columna: 3,
     filas: 1,
     columnas: 7,
@@ -77,16 +105,24 @@ const JOURNAL_SHADOW = {
 
 export default function ResultadoLeccionScreen({ route, navigation }) {
     const { width, height } = useWindowDimensions();
+    const isFocused = useIsFocused();
+    const isNavigatingRef = useRef(false);
 
     const resumenLeccion = route?.params?.resumenLeccion ?? {};
     const usuarioId = route?.params?.usuarioId ?? null;
     const lessonId = resumenLeccion.lessonId ?? route?.params?.lessonId ?? 1;
 
-    const [estadoJugador, setEstadoJugador] = useState({
-        energia: resumenLeccion.energia ?? 4,
-        rachaActual: resumenLeccion.rachaActual ?? 0,
-        cristales: resumenLeccion.recursos?.cristales ?? 0,
-        pergaminos: resumenLeccion.recursos?.pergaminos ?? 0,
+    const { estadoJugador, setEstadoJugador } = usePlayerState(usuarioId, {
+        enabled: isFocused,
+        initialState: {
+            energia: resumenLeccion.energia ?? MAX_VIDAS,
+            rachaActual: resumenLeccion.rachaActual ?? 0,
+            cristales: resumenLeccion.recursos?.cristales ?? 0,
+            pergaminos: resumenLeccion.recursos?.pergaminos ?? 0,
+            segundosParaSiguienteVida:
+                resumenLeccion.segundosParaSiguienteVida ?? 0,
+        },
+        registerActivityOnEnable: false,
     });
 
     const totalPreguntas =
@@ -109,57 +145,38 @@ export default function ResultadoLeccionScreen({ route, navigation }) {
             ? Math.round((aciertos / totalPreguntas) * 100)
             : 0);
 
-    useEffect(() => {
-        let isMounted = true;
+    const leccionCompletada =
+        resumenLeccion.completada === true ||
+        resumenLeccion.completada === 1 ||
+        resumenLeccion.motivoFinalizacion === "completada";
 
-        const cargarEstadoJugador = async () => {
-            try {
-                const datosJugador = await Database.obtenerEstadoJugador(
-                    usuarioId,
-                    { registrarActividad: false }
-                );
+    const pergaminoObtenido =
+        Math.max(0, Number(resumenLeccion.pergaminosGanados) || 0) > 0
+            ? 1
+            : 0;
 
-                if (isMounted) {
-                    setEstadoJugador(datosJugador);
-                }
-            } catch (error) {
-                console.error(
-                    "Error al cargar el estado del jugador en resultados:",
-                    error
-                );
-            }
-        };
-
-        cargarEstadoJugador();
-
-        const refreshInterval = setInterval(cargarEstadoJugador, 30000);
-        const appStateSubscription = AppState.addEventListener(
-            "change",
-            (nextState) => {
-                if (nextState === "active") {
-                    cargarEstadoJugador();
-                }
-            }
-        );
-
-        return () => {
-            isMounted = false;
-            clearInterval(refreshInterval);
-            appStateSubscription.remove();
-        };
-    }, [usuarioId]);
+    const cristalesObtenidos = Math.max(
+        0,
+        Number(resumenLeccion.cristalesGanados) || 0
+    );
 
     const terminarLeccion = () => {
-        navigation.replace("Mundo1Screen", {
+        if (isNavigatingRef.current) {
+            return;
+        }
+
+        isNavigatingRef.current = true;
+        navigation.popTo("Mundo1Screen", {
             usuarioId,
         });
     };
 
     const repetirLeccion = () => {
-        if (estadoJugador.energia <= 0) {
+        if (isNavigatingRef.current || estadoJugador.energia <= 0) {
             return;
         }
 
+        isNavigatingRef.current = true;
         navigation.replace("LeccionScreen", {
             usuarioId,
             lessonId,
@@ -168,6 +185,18 @@ export default function ResultadoLeccionScreen({ route, navigation }) {
 
     const cellWidth = width / COLUMNAS;
     const cellHeight = height / FILAS;
+
+    const rewardsHorizontalMargin =
+        cellWidth * REWARDS_AREA.margenHorizontalColumnas;
+    const rewardsContainerWidth =
+        cellWidth * REWARDS_AREA.columnas - rewardsHorizontalMargin * 2;
+    const rewardColumnWidth = rewardsContainerWidth / 2;
+    const rewardImageSize = Math.min(
+        cellHeight * REWARDS_AREA.filas * 0.68,
+        rewardColumnWidth * 0.48
+    );
+    const rewardTextSize = Math.max(18, Math.min(30, cellHeight * 0.48));
+    const resultTitleSize = Math.max(26, Math.min(40, cellHeight * 0.7));
 
     const getCellStyle = (
         fila,
@@ -194,38 +223,50 @@ export default function ResultadoLeccionScreen({ route, navigation }) {
         left: statCellWidth * index,
     });
 
-    const formatTime = (seconds) => {
-        const safeSeconds = Math.max(0, Number(seconds) || 0);
-        const minutes = Math.floor(safeSeconds / 60);
-        const remainingSeconds = safeSeconds % 60;
-
-        return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
-    };
-
-    const renderDebugGrid = () => {
-        if (!SHOW_GRID) {
-            return null;
-        }
-
-        const cells = [];
-
-        for (let fila = 1; fila <= FILAS; fila++) {
-            for (let columna = 1; columna <= COLUMNAS; columna++) {
-                cells.push(
-                    <View
-                        key={`fila-${fila}-columna-${columna}`}
+    const renderRewardItem = (source, cantidad, accessibilityLabel) => {
+        return (
+            <View style={styles.rewardItem}>
+                <View
+                    style={[
+                        styles.rewardImageFrame,
+                        { width: rewardImageSize, height: rewardImageSize },
+                    ]}
+                >
+                    <Image
+                        source={source}
+                        resizeMode="contain"
+                        accessible={false}
                         style={[
-                            styles.debugCell,
-                            getCellStyle(fila, columna),
+                            styles.rewardShadowImage,
+                            { width: rewardImageSize, height: rewardImageSize },
                         ]}
                     />
-                );
-            }
-        }
 
-        return (
-            <View pointerEvents="none" style={styles.debugGrid}>
-                {cells}
+                    <Image
+                        source={source}
+                        resizeMode="contain"
+                        accessibilityLabel={accessibilityLabel}
+                        style={[
+                            styles.rewardImage,
+                            { width: rewardImageSize, height: rewardImageSize },
+                        ]}
+                    />
+                </View>
+
+                <Text
+                    style={[
+                        globalStyles.navbarWorldText,
+                        styles.rewardAmountText,
+                        styles.textBackdrop,
+                        { fontSize: rewardTextSize },
+                    ]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.6}
+                    includeFontPadding={false}
+                >
+                    {`x${cantidad}`}
+                </Text>
             </View>
         );
     };
@@ -239,36 +280,26 @@ export default function ResultadoLeccionScreen({ route, navigation }) {
                     getStatCellStyle(index),
                 ]}
             >
-                <View style={styles.statSlipFrame}>
-                    <Image
-                        source={require("../assets/images/Pergamino_Slip.png")}
-                        resizeMode="stretch"
-                        style={styles.statSlipShadowImage}
-                    />
-
-                    <Image
-                        source={require("../assets/images/Pergamino_Slip.png")}
-                        resizeMode="stretch"
-                        style={styles.statSlipImage}
-                    />
-
-                    <View style={styles.statTextLayer}>
-                        <Text
-                            style={[
-                                globalStyles.navbarWorldText,
-                                styles.worldText,
-                                styles.textBackdrop,
-                                styles.statText,
-                            ]}
-                            numberOfLines={3}
-                            adjustsFontSizeToFit
-                            minimumFontScale={0.45}
-                            includeFontPadding={false}
-                        >
-                            {`${titulo}\n${valor}`}
-                        </Text>
-                    </View>
-                </View>
+                <ParchmentSlip
+                    visualScale={SLIP_VISUAL_SCALE}
+                    shadow={SLIP_SHADOW}
+                    contentStyle={styles.statTextLayer}
+                >
+                    <Text
+                        style={[
+                            globalStyles.navbarWorldText,
+                            styles.worldText,
+                            styles.textBackdrop,
+                            styles.statText,
+                        ]}
+                        numberOfLines={3}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.45}
+                        includeFontPadding={false}
+                    >
+                        {`${titulo}\n${valor}`}
+                    </Text>
+                </ParchmentSlip>
             </View>
         );
     };
@@ -294,7 +325,13 @@ export default function ResultadoLeccionScreen({ route, navigation }) {
                 >
                     {renderStatSlip(0, "Aciertos", aciertos)}
                     {renderStatSlip(1, "Precisión", `${precision}%`)}
-                    {renderStatSlip(2, "Tiempo Usado", formatTime(tiempoTotalSegundos))}
+                    {renderStatSlip(
+                        2,
+                        "Tiempo Usado",
+                        formatDuration(tiempoTotalSegundos, {
+                            showHours: false,
+                        })
+                    )}
                 </View>
 
                 {/* Journal central - Área (fila 5, columna 2.5), ocupa 8 filas x 8 columnas */}
@@ -320,6 +357,61 @@ export default function ResultadoLeccionScreen({ route, navigation }) {
                         resizeMode="contain"
                         style={styles.journalImage}
                     />
+                </View>
+
+                {/* Título: fila 2, centrado */}
+                <View
+                    style={[
+                        styles.resultTitleContainer,
+                        getCellStyle(
+                            TITLE_AREA.fila,
+                            TITLE_AREA.columna,
+                            TITLE_AREA.filas,
+                            TITLE_AREA.columnas
+                        ),
+                    ]}
+                >
+                    <Text
+                        style={[
+                            globalStyles.navbarWorldText,
+                            styles.resultTitleText,
+                            styles.textBackdrop,
+                            { fontSize: resultTitleSize },
+                        ]}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.65}
+                        includeFontPadding={false}
+                    >
+                        {leccionCompletada ? "¡Éxito!" : "Fallido..."}
+                    </Text>
+                </View>
+
+                {/* Recompensas: fila 4, dos filas de altura y dos columnas internas */}
+                <View
+                    style={[
+                        styles.rewardsContainer,
+                        {
+                            width: rewardsContainerWidth,
+                            height: cellHeight * REWARDS_AREA.filas,
+                            top: cellHeight * (REWARDS_AREA.fila - 1),
+                            left:
+                                cellWidth * (REWARDS_AREA.columna - 1) +
+                                rewardsHorizontalMargin,
+                        },
+                    ]}
+                >
+                    {renderRewardItem(
+                        require("../assets/images/Pergamino_reward.png"),
+                        pergaminoObtenido,
+                        "Pergamino obtenido"
+                    )}
+
+                    {renderRewardItem(
+                        require("../assets/images/cristales_reward.png"),
+                        cristalesObtenidos,
+                        "Cristales obtenidos"
+                    )}
                 </View>
 
                 {/* Botones de resultado - Área (fila 12, columna 3), ocupa 1 fila x 7 columnas */}
@@ -387,11 +479,21 @@ export default function ResultadoLeccionScreen({ route, navigation }) {
                 </View>
             </View>
 
-            {renderDebugGrid()}
-
             <WorldBottomNavbar
                 racha={estadoJugador.rachaActual}
+                usuarioId={usuarioId}
                 energia={estadoJugador.energia}
+                cristales={estadoJugador.cristales}
+                segundosParaSiguienteVida={estadoJugador.segundosParaSiguienteVida}
+                onEstadoJugadorChange={setEstadoJugador}
+            />
+
+            <DebugGrid
+                visible={SHOW_GRID}
+                rows={FILAS}
+                columns={COLUMNAS}
+                cellWidth={cellWidth}
+                cellHeight={cellHeight}
             />
         </ImageBackground>
     );
@@ -408,18 +510,6 @@ const styles = StyleSheet.create({
         ...StyleSheet.absoluteFillObject,
         position: "absolute",
         zIndex: 2,
-    },
-
-    debugGrid: {
-        ...StyleSheet.absoluteFillObject,
-        position: "absolute",
-        zIndex: 20,
-    },
-
-    debugCell: {
-        position: "absolute",
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: "rgba(255,255,255,0.7)",
     },
 
     worldText: {
@@ -439,6 +529,72 @@ const styles = StyleSheet.create({
         textShadowRadius: 3,
     },
 
+    resultTitleContainer: {
+        position: "absolute",
+        justifyContent: "center",
+        alignItems: "center",
+        zIndex: 6,
+    },
+
+    resultTitleText: {
+        width: "100%",
+        color: "#2B1A0B",
+        textAlign: "center",
+        textAlignVertical: "center",
+    },
+
+    rewardsContainer: {
+        position: "absolute",
+        flexDirection: "row",
+        justifyContent: "space-around",
+        alignItems: "center",
+        overflow: "visible",
+        zIndex: 6,
+    },
+
+    rewardItem: {
+        flex: 1,
+        height: "100%",
+        minWidth: 0,
+        flexDirection: "row",
+        justifyContent: "center",
+        alignItems: "center",
+        overflow: "visible",
+        paddingHorizontal: 4,
+    },
+
+    rewardImageFrame: {
+        position: "relative",
+        justifyContent: "center",
+        alignItems: "center",
+        overflow: "visible",
+        flexShrink: 0,
+    },
+
+    rewardShadowImage: {
+        position: "absolute",
+        tintColor: "#000",
+        opacity: REWARD_SHADOW.opacity,
+        transform: [
+            { translateX: REWARD_SHADOW.offsetX },
+            { translateY: REWARD_SHADOW.offsetY },
+        ],
+    },
+
+    rewardImage: {
+        position: "absolute",
+    },
+
+    rewardAmountText: {
+        width: "auto",
+        maxWidth: "42%",
+        marginLeft: 6,
+        color: "#2B1A0B",
+        textAlign: "center",
+        textAlignVertical: "center",
+        flexShrink: 1,
+    },
+
     statsContainer: {
         position: "absolute",
         overflow: "visible",
@@ -450,36 +606,6 @@ const styles = StyleSheet.create({
         alignItems: "center",
         overflow: "visible",
         paddingHorizontal: 4,
-    },
-
-    statSlipFrame: {
-        width: "100%",
-        height: "100%",
-        justifyContent: "center",
-        alignItems: "center",
-        overflow: "visible",
-    },
-
-    statSlipShadowImage: {
-        position: "absolute",
-
-        width: `${SLIP_VISUAL_SCALE.width * SLIP_SHADOW.scale * 100}%`,
-        height: `${SLIP_VISUAL_SCALE.height * SLIP_SHADOW.scale * 100}%`,
-
-        tintColor: "#000",
-        opacity: SLIP_SHADOW.opacity,
-
-        transform: [
-            { translateX: SLIP_SHADOW.offsetX },
-            { translateY: SLIP_SHADOW.offsetY },
-        ],
-    },
-
-    statSlipImage: {
-        position: "absolute",
-
-        width: `${SLIP_VISUAL_SCALE.width * 100}%`,
-        height: `${SLIP_VISUAL_SCALE.height * 100}%`,
     },
 
     statTextLayer: {

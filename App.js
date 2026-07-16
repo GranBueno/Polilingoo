@@ -13,7 +13,7 @@ import useAppFonts from "./src/hooks/useAppFonts";
 import Database from "./src/class/Database";
 
 export default function App() {
-    const fontsLoaded = useAppFonts();
+    const { fontsLoaded, fontError } = useAppFonts();
     const [databaseReady, setDatabaseReady] = useState(false);
     const [databaseError, setDatabaseError] = useState(null);
 
@@ -43,14 +43,16 @@ export default function App() {
         };
     }, []);
 
-    if (databaseError) {
+    if (databaseError || fontError) {
+        const startupError = databaseError ?? fontError;
+
         return (
             <View style={styles.loadingContainer}>
                 <Text style={styles.errorText}>
-                    No se pudo cargar la base de datos.
+                    No se pudo iniciar Polilingo.
                 </Text>
                 <Text style={styles.errorDetailText}>
-                    {databaseError.message}
+                    {startupError?.message ?? "Error desconocido."}
                 </Text>
             </View>
         );

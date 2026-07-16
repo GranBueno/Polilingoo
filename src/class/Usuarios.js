@@ -1,3 +1,5 @@
+import { MAX_VIDAS } from "../config/gameRules";
+
 export default class Usuario {
     constructor(
         nombre,
@@ -8,7 +10,7 @@ export default class Usuario {
         puntaje = 0,
         mayorRacha = 0,
         rachaActual = 0,
-        energia = 4
+        energia = MAX_VIDAS
     ) {
         this.nombre = String(nombre ?? "").trim();
         this.correo = String(correo ?? "").trim().toLowerCase();
@@ -19,25 +21,6 @@ export default class Usuario {
         this.mayorRacha = mayorRacha;
         this.rachaActual = rachaActual;
         this.energia = energia;
-    }
-
-    aumentarRacha() {
-        this.rachaActual += 1;
-
-        if (this.rachaActual > this.mayorRacha) {
-            this.mayorRacha = this.rachaActual;
-        }
-    }
-
-    perderRacha() {
-        this.rachaActual = 0;
-    }
-
-    actualizarPuntaje(respuestasCorrectas, respuestasIncorrectas) {
-        const puntosGanados = respuestasCorrectas * 10;
-        const puntosPerdidos = respuestasIncorrectas * 7;
-
-        this.puntaje = Math.max(0, this.puntaje + puntosGanados - puntosPerdidos);
     }
 
     validarNombre() {

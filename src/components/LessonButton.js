@@ -27,6 +27,10 @@ export default function LessonButton({
 
     return (
         <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Lección ${lessonNumber}`}
+            accessibilityState={{ disabled: isLocked }}
+            disabled={isLocked}
             onPress={handlePress}
             style={({ pressed }) => [
                 styles.container,
